@@ -4,11 +4,13 @@ import { logger } from '../utils/logger.js';
 import { ApiError } from '../types/index.js';
 
 /**
- * Mapeia mensagens de erro do Playwright/browser para códigos HTTP.
+ * Mapeia mensagens de erro do Playwright/browser/queue para códigos HTTP.
  */
-function mapErrorToHttp(error: Error): { status: number; code: string } {
+function mapErrorToHttp(error: Error): { status: number; code: string; retryAfter?: number } {
   const msg = error.message;
 
+  if (msg.includes('QUEUE_FULL')) return { status: 503, code: 'SERVER_OVERLOADED', retryAfter: 10 };
+  if (msg.includes('QUEUE_TIMEOUT')) return { status: 503, code: 'QUEUE_TIMEOUT', retryAfter: 5 };
   if (msg.includes('AUTH_FAILED')) return { status: 502, code: 'AUTH_FAILED' };
   if (msg.includes('BROWSER_POOL_TIMEOUT')) return { status: 503, code: 'BROWSER_UNAVAILABLE' };
   if (msg.includes('NOT_FOUND')) return { status: 404, code: 'NOT_FOUND' };
@@ -42,7 +44,7 @@ export function errorHandler(
   }
 
   if (err instanceof Error) {
-    const { status, code } = mapErrorToHttp(err);
+    const { status, code, retryAfter } = mapErrorToHttp(err);
 
     logger.error(
       { err: { message: err.message, stack: err.stack }, path: req.path, method: req.method },
@@ -55,6 +57,10 @@ export function errorHandler(
       code,
       ...(process.env.NODE_ENV === 'development' && { details: err.stack }),
     };
+
+    if (retryAfter) {
+      res.setHeader('Retry-After', retryAfter);
+    }
 
     res.status(status).json(error);
     return;

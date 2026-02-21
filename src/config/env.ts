@@ -30,6 +30,10 @@ const envSchema = z.object({
   // Rate limiting
   RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60000),
   RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(30),
+
+  // Fila de requisições (RequestQueue)
+  QUEUE_MAX_SIZE: z.coerce.number().int().min(1).max(100).default(20),
+  QUEUE_TIMEOUT_MS: z.coerce.number().int().positive().default(60000),
 });
 
 function parseEnv() {

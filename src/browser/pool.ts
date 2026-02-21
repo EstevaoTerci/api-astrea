@@ -1,6 +1,7 @@
 import { Browser, BrowserContext, chromium } from 'playwright';
 import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
+import { RequestQueue } from './request-queue.js';
 
 interface PoolEntry {
   context: BrowserContext;
@@ -12,17 +13,24 @@ interface PoolEntry {
  * Pool de BrowserContexts do Playwright.
  * Mantém um único Browser Chromium e gerencia múltiplos contextos isolados.
  * Cada contexto representa uma sessão independente (cookies/storage separados).
+ *
+ * Usa RequestQueue para gerenciar a fila de espera com FIFO,
+ * ao invés do antigo busy-wait polling.
  */
 class BrowserPool {
   private browser: Browser | null = null;
   private pool: PoolEntry[] = [];
   private readonly size: number;
-  private readonly timeoutMs: number;
   private initPromise: Promise<void> | null = null;
+  private readonly requestQueue: RequestQueue;
 
-  constructor(size: number, timeoutMs: number) {
+  constructor(size: number) {
     this.size = size;
-    this.timeoutMs = timeoutMs;
+    this.requestQueue = new RequestQueue({
+      maxConcurrent: size,
+      maxQueueSize: env.QUEUE_MAX_SIZE,
+      queueTimeoutMs: env.QUEUE_TIMEOUT_MS,
+    });
   }
 
   async initialize(): Promise<void> {
@@ -70,29 +78,32 @@ class BrowserPool {
 
   /**
    * Adquire um context disponível do pool.
-   * Aguarda até `timeoutMs` se todos estiverem em uso.
-   * @throws Error se timeout esgotar
+   * Usa RequestQueue para enfileiramento FIFO:
+   * - Se há context livre: resolve imediatamente
+   * - Se todos em uso: entra na fila (FIFO) e aguarda
+   * - Se fila cheia: rejeita imediatamente (QUEUE_FULL → 503)
+   * - Se timeout na fila: rejeita com QUEUE_TIMEOUT
+   * @throws Error se fila cheia ou timeout
    */
   async acquire(): Promise<BrowserContext> {
     await this.initialize();
 
-    const start = Date.now();
+    // Aguarda slot na fila FIFO (sem busy-wait)
+    await this.requestQueue.enqueue();
 
-    while (Date.now() - start < this.timeoutMs) {
-      const entry = this.pool.find((e) => !e.inUse);
+    // Slot garantido — busca context livre
+    const entry = this.pool.find((e) => !e.inUse);
 
-      if (entry) {
-        entry.inUse = true;
-        entry.lastUsed = Date.now();
-        logger.debug({ available: this.pool.filter((e) => !e.inUse).length }, 'Context adquirido do pool.');
-        return entry.context;
-      }
-
-      // Aguarda 100ms antes de tentar novamente
-      await new Promise((r) => setTimeout(r, 100));
+    if (entry) {
+      entry.inUse = true;
+      entry.lastUsed = Date.now();
+      logger.debug({ available: this.pool.filter((e) => !e.inUse).length }, 'Context adquirido do pool.');
+      return entry.context;
     }
 
-    throw new Error('BROWSER_POOL_TIMEOUT: Nenhum context disponível no pool após timeout.');
+    // Fallback de segurança: não deveria chegar aqui pois a queue controla a concorrência
+    this.requestQueue.dequeue();
+    throw new Error('BROWSER_POOL_TIMEOUT: Nenhum context disponível no pool (inconsistência interna).');
   }
 
   /**
@@ -121,6 +132,9 @@ class BrowserPool {
       logger.warn('Context corrompido, recriando...');
       await this._replaceContext(entry);
     }
+
+    // Libera o próximo da fila FIFO
+    this.requestQueue.dequeue();
   }
 
   /**
@@ -167,12 +181,15 @@ class BrowserPool {
 
   get stats() {
     return {
-      total: this.pool.length,
-      inUse: this.pool.filter((e) => e.inUse).length,
-      available: this.pool.filter((e) => !e.inUse).length,
+      pool: {
+        total: this.pool.length,
+        inUse: this.pool.filter((e) => e.inUse).length,
+        available: this.pool.filter((e) => !e.inUse).length,
+      },
+      queue: this.requestQueue.stats,
     };
   }
 }
 
 // Instância global do pool
-export const browserPool = new BrowserPool(env.BROWSER_POOL_SIZE, env.BROWSER_TIMEOUT_MS);
+export const browserPool = new BrowserPool(env.BROWSER_POOL_SIZE);
