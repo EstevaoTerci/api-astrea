@@ -1,0 +1,35 @@
+# Dependências
+node_modules/
+
+# Build
+dist/
+
+# Variáveis de ambiente (NUNCA commitar o .env com credenciais reais)
+.env
+.env.local
+.env.*.local
+
+# Prompts de desenvolvimento (instruções internas)
+prompts/
+
+# Playwright
+playwright-report/
+test-results/
+.playwright-mcp/
+
+# Logs
+*.log
+logs/
+
+# SO
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# Cache TypeScript
+*.tsbuildinfo

@@ -1,0 +1,32 @@
+services:
+  api-astrea:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: api-astrea
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+    deploy:
+      resources:
+        limits:
+          memory: 1200M
+          cpus: "1.5"
+        reservations:
+          memory: 512M
+    shm_size: "256mb"  # Necessário para o Chromium não travar
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

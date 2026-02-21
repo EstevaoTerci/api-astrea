@@ -1,0 +1,42 @@
+# Dependências (reinstaladas no build)
+node_modules/
+
+# Build local
+dist/
+
+# Ambiente
+.env
+.env.local
+.env.*.local
+
+# Prompts de desenvolvimento
+prompts/
+
+# Git
+.git/
+.gitignore
+
+# Editor
+.vscode/
+.idea/
+
+# Playwright local
+playwright-report/
+test-results/
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-compose.yml
+Dockerfile
+.dockerignore
+
+# Docs
+README.md
+*.md
