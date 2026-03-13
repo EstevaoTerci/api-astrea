@@ -88,17 +88,43 @@ export interface Andamento {
 
 export interface Tarefa {
   id: string;
+  /** Conteúdo/descrição da tarefa (campo "description" no GCP Endpoints). */
   titulo: string;
   descricao?: string;
   status: string;
   prioridade?: string;
   prazo?: string;
+  responsavelId?: string;
   responsavel?: string;
   clienteId?: string;
   clienteNome?: string;
   casoId?: string;
   processoId?: string;
+  listaId?: string;
   createdAt?: string;
+}
+
+export interface CriarTarefaInput {
+  /** Conteúdo da tarefa (mapeado para description na API GCP). */
+  titulo: string;
+  /** ID do caso/processo associado (casoId no TaskInfoDTO). */
+  casoId?: string;
+  /** ID do usuário responsável. Obrigatório para criação via GCP Endpoints. */
+  responsavelId: string;
+  /** ID da lista de tarefas destino. Usa a lista padrão se omitido. */
+  listaId?: string;
+  /** Data de vencimento no formato YYYY-MM-DD. */
+  prazo?: string;
+  /** Prioridade numérica: 0=normal, 1=baixa, 2=alta. */
+  prioridade?: number;
+}
+
+export interface AtualizarTarefaInput {
+  titulo?: string;
+  status?: string;
+  prazo?: string;
+  responsavelId?: string;
+  prioridade?: number;
 }
 
 export interface Publicacao {
@@ -110,6 +136,65 @@ export interface Publicacao {
   tipo?: string;
   prazo?: string;
   lida?: boolean;
+}
+
+export interface Usuario {
+  id: string;
+  nome: string;
+  email: string;
+  /** Apelido/nickname do usuário no escritório. */
+  apelido?: string;
+  foto?: string;
+  admin?: boolean;
+  status?: string;
+  perfil?: string;
+  /** ID do contato associado ao usuário. */
+  contatoId?: string;
+}
+
+export interface Atendimento {
+  id: string;
+  /** Assunto/título do atendimento. */
+  assunto: string;
+  status: string;
+  clienteId?: string;
+  clienteNome?: string;
+  casoId?: string;
+  casoTitulo?: string;
+  responsavelId?: string;
+  responsavelNome?: string;
+  /** Data/hora do atendimento (ISO 8601). */
+  dataHora?: string;
+  descricao?: string;
+  duracaoMinutos?: number;
+  createdAt?: string;
+}
+
+export interface CriarAtendimentoInput {
+  /** ID do cliente (contato) para associar ao atendimento. */
+  clienteId: string;
+  /** ID do caso/processo associado. */
+  casoId?: string;
+  /** Assunto do atendimento. */
+  assunto: string;
+  /** Data no formato YYYY-MM-DD. */
+  data: string;
+  /** Hora no formato HH:mm. */
+  hora: string;
+  /** ID do usuário responsável. */
+  responsavelId: string;
+  descricao?: string;
+  duracaoMinutos?: number;
+}
+
+export interface FiltrosAtendimento {
+  clienteId?: string;
+  casoId?: string;
+  status?: string;
+  dataInicio?: string;
+  dataFim?: string;
+  pagina?: number;
+  limite?: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -194,6 +279,8 @@ export interface ServiceError {
     | 'NOT_FOUND'
     | 'SCRAPE_ERROR'
     | 'TIMEOUT'
-    | 'AUTH_FAILED';
+    | 'AUTH_FAILED'
+    | 'VALIDATION_ERROR'
+    | 'API_ERROR';
   retryable: boolean;
 }

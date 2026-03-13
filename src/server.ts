@@ -16,6 +16,8 @@ import casosRoutes from './routes/casos.routes.js';
 import andamentosRoutes from './routes/andamentos.routes.js';
 import tarefasRoutes from './routes/tarefas.routes.js';
 import publicacoesRoutes from './routes/publicacoes.routes.js';
+import atendimentosRoutes from './routes/atendimentos.routes.js';
+import usuariosRoutes from './routes/usuarios.routes.js';
 
 const app = express();
 
@@ -26,7 +28,7 @@ app.use(helmet());
 app.use(
   cors({
     origin: env.NODE_ENV === 'production' ? false : '*',
-    methods: ['GET'],
+    methods: ['GET', 'POST', 'PATCH', 'DELETE'],
   }),
 );
 app.use(express.json({ limit: '1mb' }));
@@ -51,6 +53,8 @@ app.use('/api/casos', casosRoutes);
 app.use('/api/andamentos', andamentosRoutes);
 app.use('/api/tarefas', tarefasRoutes);
 app.use('/api/publicacoes', publicacoesRoutes);
+app.use('/api/atendimentos', atendimentosRoutes);
+app.use('/api/usuarios', usuariosRoutes);
 
 // Rota catch-all para 404
 app.use((_req, res) => {

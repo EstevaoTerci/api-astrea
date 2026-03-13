@@ -34,6 +34,27 @@ const envSchema = z.object({
   // Fila de requisições (RequestQueue)
   QUEUE_MAX_SIZE: z.coerce.number().int().min(1).max(100).default(20),
   QUEUE_TIMEOUT_MS: z.coerce.number().int().positive().default(60000),
+
+  // Tenant do Astrea (necessário para chamadas GCP Endpoints / users API)
+  ASTREA_TENANT_ID: z.string().default('6692712561442816'),
+
+  // LLM Fallback — suporte a Anthropic, OpenAI e Google Gemini
+  ANTHROPIC_API_KEY: z.string().optional(),
+  OPENAI_API_KEY: z.string().optional(),
+  GOOGLE_API_KEY: z.string().optional(),
+  /** Provedor LLM explícito: 'anthropic' | 'openai' | 'google'. Se omitido, detecta pela chave disponível. */
+  LLM_PROVIDER: z.enum(['anthropic', 'openai', 'google']).optional(),
+  /** Modelo OpenAI a usar no fallback (padrão: gpt-4o-mini). */
+  OPENAI_MODEL: z.string().optional(),
+  /** Modelo Google a usar no fallback (padrão: gemini-1.5-flash). */
+  GOOGLE_MODEL: z.string().optional(),
+
+  // Notificação de incidentes por email
+  DEVELOPER_EMAIL: z.string().email().default('estevaoterci@gmail.com'),
+  SMTP_HOST: z.string().optional(),
+  SMTP_PORT: z.coerce.number().default(587),
+  SMTP_USER: z.string().optional(),
+  SMTP_PASS: z.string().optional(),
 });
 
 function parseEnv() {

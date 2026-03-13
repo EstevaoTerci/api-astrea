@@ -1,8 +1,6 @@
-import { BrowserContext } from 'playwright';
-import { ensureAuthenticated, invalidateSession } from '../browser/session.js';
+import { withBrowserContext } from '../browser/astrea-http.js';
 import { navigateTo, waitForElement } from '../browser/navigator.js';
-import { browserPool } from '../browser/pool.js';
-import { withRetry, isRetryablePlaywrightError } from '../utils/retry.js';
+import { isRetryablePlaywrightError } from '../utils/retry.js';
 import { logger } from '../utils/logger.js';
 import type { Andamento, FiltrosAndamento, ServiceResponse, PaginationMeta } from '../types/index.js';
 
@@ -24,35 +22,12 @@ function parseDateBR(date: string): string {
   return `${m[3]}-${m[2]}-${m[1]}`;
 }
 
-async function withBrowserContext<T>(operation: (context: BrowserContext) => Promise<T>): Promise<T> {
-  const context = await browserPool.acquire();
-  try {
-    return await withRetry(() => operation(context), {
-      maxAttempts: 3,
-      retryIf: (err) => {
-        if (err instanceof Error && err.message.includes('AUTH_FAILED')) return false;
-        return isRetryablePlaywrightError(err as Error);
-      },
-      onRetry: (err, attempt) => {
-        logger.warn({ err: String(err), attempt }, 'Retentando...');
-        if (err instanceof Error && err.message.includes('SESSION_EXPIRED')) {
-          invalidateSession(context);
-        }
-      },
-    });
-  } finally {
-    await browserPool.release(context);
-  }
-}
-
 export async function listarAndamentos(
   processoId: string,
   filtros?: FiltrosAndamento,
 ): Promise<ServiceResponse<Andamento[]>> {
   try {
-    const data = await withBrowserContext(async (context) => {
-      const page = await ensureAuthenticated(context);
-
+    const data = await withBrowserContext(async (page) => {
       // Navega para o detalhe do processo/caso: /#/main/folders/detail/ID
       await navigateTo(page, SELECTORS.FOLDER_DETAIL_PATH(processoId));
       await page.waitForTimeout(1000);
@@ -128,9 +103,7 @@ export async function buscarAndamentosRecentes(
   filtros?: FiltrosAndamento,
 ): Promise<ServiceResponse<Andamento[]>> {
   try {
-    const data = await withBrowserContext(async (context) => {
-      const page = await ensureAuthenticated(context);
-
+    const data = await withBrowserContext(async (page) => {
       // Navega para a lista de pastas para pegar o processo mais recentemente movimentado
       await navigateTo(page, SELECTORS.FOLDERS_PATH);
       await waitForElement(page, 'table tbody tr').catch(() => {});

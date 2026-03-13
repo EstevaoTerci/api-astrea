@@ -1,33 +1,32 @@
-import { Browser, BrowserContext, chromium } from 'playwright';
+import { Browser, BrowserContext, Page, chromium } from 'playwright';
 import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
 import { RequestQueue } from './request-queue.js';
 
-interface PoolEntry {
-  context: BrowserContext;
-  inUse: boolean;
-  lastUsed: number;
-}
-
 /**
- * Pool de BrowserContexts do Playwright.
- * Mantém um único Browser Chromium e gerencia múltiplos contextos isolados.
- * Cada contexto representa uma sessão independente (cookies/storage separados).
+ * Pool de páginas Playwright com sessão compartilhada.
  *
- * Usa RequestQueue para gerenciar a fila de espera com FIFO,
- * ao invés do antigo busy-wait polling.
+ * Usa um único BrowserContext (= 1 janela) para que todas as páginas (abas)
+ * compartilhem cookies e localStorage. Isso evita que o Astrea invalide
+ * sessões por detectar múltiplos logins simultâneos do mesmo usuário.
+ *
+ * A concorrência é controlada pela RequestQueue (FIFO), limitando o número
+ * máximo de abas abertas simultaneamente (BROWSER_POOL_SIZE).
  */
 class BrowserPool {
   private browser: Browser | null = null;
-  private pool: PoolEntry[] = [];
-  private readonly size: number;
+  private context: BrowserContext | null = null;
+  private authenticated = false;
+  private authPromise: Promise<void> | null = null;
+  private readonly maxPages: number;
   private initPromise: Promise<void> | null = null;
   private readonly requestQueue: RequestQueue;
+  private activePagesCount = 0;
 
-  constructor(size: number) {
-    this.size = size;
+  constructor(maxPages: number) {
+    this.maxPages = maxPages;
     this.requestQueue = new RequestQueue({
-      maxConcurrent: size,
+      maxConcurrent: maxPages,
       maxQueueSize: env.QUEUE_MAX_SIZE,
       queueTimeoutMs: env.QUEUE_TIMEOUT_MS,
     });
@@ -35,13 +34,12 @@ class BrowserPool {
 
   async initialize(): Promise<void> {
     if (this.initPromise) return this.initPromise;
-
     this.initPromise = this._initialize();
     return this.initPromise;
   }
 
   private async _initialize(): Promise<void> {
-    logger.info({ poolSize: this.size }, 'Iniciando browser Chromium...');
+    logger.info({ maxPages: this.maxPages }, 'Iniciando browser Chromium (single-context)...');
 
     this.browser = await chromium.launch({
       headless: env.BROWSER_HEADLESS,
@@ -56,118 +54,161 @@ class BrowserPool {
       ],
     });
 
-    for (let i = 0; i < this.size; i++) {
-      const context = await this._createContext();
-      this.pool.push({ context, inUse: false, lastUsed: Date.now() });
-    }
-
-    logger.info({ poolSize: this.size }, 'Pool de browser inicializado com sucesso.');
-  }
-
-  private async _createContext(): Promise<BrowserContext> {
-    if (!this.browser) throw new Error('Browser não inicializado');
-
-    return this.browser.newContext({
+    this.context = await this.browser.newContext({
       userAgent:
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
       viewport: { width: 1280, height: 800 },
       locale: 'pt-BR',
       timezoneId: 'America/Sao_Paulo',
     });
+
+    logger.info({ maxPages: this.maxPages }, 'Pool de browser inicializado (single-context, multi-page).');
   }
 
   /**
-   * Adquire um context disponível do pool.
-   * Usa RequestQueue para enfileiramento FIFO:
-   * - Se há context livre: resolve imediatamente
-   * - Se todos em uso: entra na fila (FIFO) e aguarda
-   * - Se fila cheia: rejeita imediatamente (QUEUE_FULL → 503)
-   * - Se timeout na fila: rejeita com QUEUE_TIMEOUT
-   * @throws Error se fila cheia ou timeout
+   * Adquire uma nova página (aba) autenticada no contexto compartilhado.
+   *
+   * - Aguarda slot na fila FIFO (backpressure se cheia)
+   * - Se a sessão não está ativa, faz login (com lock para evitar logins paralelos)
+   * - Cria nova aba no contexto compartilhado
    */
-  async acquire(): Promise<BrowserContext> {
+  async acquirePage(): Promise<Page> {
     await this.initialize();
-
-    // Aguarda slot na fila FIFO (sem busy-wait)
     await this.requestQueue.enqueue();
 
-    // Slot garantido — busca context livre
-    const entry = this.pool.find((e) => !e.inUse);
-
-    if (entry) {
-      entry.inUse = true;
-      entry.lastUsed = Date.now();
-      logger.debug({ available: this.pool.filter((e) => !e.inUse).length }, 'Context adquirido do pool.');
-      return entry.context;
-    }
-
-    // Fallback de segurança: não deveria chegar aqui pois a queue controla a concorrência
-    this.requestQueue.dequeue();
-    throw new Error('BROWSER_POOL_TIMEOUT: Nenhum context disponível no pool (inconsistência interna).');
-  }
-
-  /**
-   * Libera um context de volta ao pool.
-   * Se o context estiver em estado inválido, recria-o.
-   */
-  async release(context: BrowserContext): Promise<void> {
-    const entry = this.pool.find((e) => e.context === context);
-
-    if (!entry) {
-      logger.warn('Tentativa de liberar context não pertencente ao pool.');
-      return;
-    }
-
-    // Verifica se o context ainda é utilizável
     try {
-      // Fecha páginas abertas para reutilização limpa
-      const pages = context.pages();
-      for (const page of pages) {
-        await page.close().catch(() => {});
+      if (!this.authenticated) {
+        await this._ensureAuthenticated();
       }
-      entry.inUse = false;
-      entry.lastUsed = Date.now();
-      logger.debug({ available: this.pool.filter((e) => !e.inUse).length }, 'Context liberado para o pool.');
-    } catch {
-      logger.warn('Context corrompido, recriando...');
-      await this._replaceContext(entry);
-    }
 
-    // Libera o próximo da fila FIFO
+      const page = await this.context!.newPage();
+      this.activePagesCount++;
+      logger.debug({ activePages: this.activePagesCount }, 'Página adquirida do pool.');
+      return page;
+    } catch (err) {
+      // Se falhou ao criar página, libera o slot
+      this.requestQueue.dequeue();
+      throw err;
+    }
+  }
+
+  /**
+   * Libera uma página (fecha a aba) e devolve o slot para a fila.
+   */
+  async releasePage(page: Page): Promise<void> {
+    try {
+      await page.close().catch(() => {});
+    } catch {
+      // ignorado — página pode já estar fechada
+    }
+    this.activePagesCount--;
+    logger.debug({ activePages: this.activePagesCount }, 'Página liberada do pool.');
     this.requestQueue.dequeue();
   }
 
   /**
-   * Remove a sessão de um context (logout / limpa cookies).
-   * Útil quando uma sessão expira e precisa refazer login.
+   * Invalida a sessão (força re-login na próxima acquirePage).
    */
-  async clearSession(context: BrowserContext): Promise<void> {
+  invalidateSession(): void {
+    this.authenticated = false;
+    this.authPromise = null;
+    logger.debug('Sessão invalidada — próxima operação fará re-login.');
+  }
+
+  /**
+   * Limpa cookies e storage do contexto compartilhado.
+   */
+  async clearSession(): Promise<void> {
+    if (!this.context) return;
     try {
-      await context.clearCookies();
-      await context.clearPermissions();
+      await this.context.clearCookies();
+      await this.context.clearPermissions();
     } catch (err) {
       logger.warn({ err }, 'Erro ao limpar sessão do context.');
     }
+    this.invalidateSession();
   }
 
-  private async _replaceContext(entry: PoolEntry): Promise<void> {
-    try {
-      await entry.context.close().catch(() => {});
-    } catch {}
+  /**
+   * Autentica no Astrea usando o contexto compartilhado.
+   * Usa lock (authPromise) para evitar logins simultâneos quando
+   * múltiplas requisições chegam ao mesmo tempo sem sessão ativa.
+   */
+  private async _ensureAuthenticated(): Promise<void> {
+    if (this.authPromise) {
+      return this.authPromise;
+    }
 
-    const newContext = await this._createContext();
-    entry.context = newContext;
-    entry.inUse = false;
-    entry.lastUsed = Date.now();
+    this.authPromise = this._doLogin();
+    try {
+      await this.authPromise;
+      this.authenticated = true;
+    } catch (err) {
+      this.authPromise = null;
+      throw err;
+    }
+  }
+
+  private async _doLogin(): Promise<void> {
+    if (!this.context) throw new Error('BROWSER_UNAVAILABLE: Context não inicializado');
+
+    // Limpa cookies antes de (re)login para garantir que o Astrea
+    // mostre a tela de login em vez de redirecionar para o app com sessão stale.
+    await this.context.clearCookies();
+
+    const page = await this.context.newPage();
+    try {
+      logger.info('Realizando login no Astrea (contexto compartilhado)...');
+
+      await page.goto('https://astrea.net.br', {
+        waitUntil: 'domcontentloaded',
+        timeout: env.BROWSER_TIMEOUT_MS,
+      });
+
+      await page.waitForSelector('input[placeholder="Digite seu email"]', {
+        state: 'visible',
+        timeout: env.BROWSER_TIMEOUT_MS,
+      });
+
+      await page.fill('input[placeholder="Digite seu email"]', env.ASTREA_EMAIL);
+      await page.fill('input[type="password"]', env.ASTREA_PASSWORD);
+      await page.click('button:has-text("Entrar")');
+
+      await page.waitForFunction(
+        (fragment: string) => window.location.hash.includes(fragment),
+        '#/main/',
+        { timeout: env.BROWSER_TIMEOUT_MS },
+      );
+
+      await page.waitForTimeout(800);
+
+      logger.info({ url: page.url() }, 'Login no Astrea realizado com sucesso (sessão compartilhada).');
+    } catch (originalErr) {
+      try {
+        const errorEl = await page.$('.alert-danger, .alert-error, [class*="alerta"], div.toast-error');
+        if (errorEl) {
+          const errorText = (await errorEl.textContent())?.trim();
+          throw new Error(`AUTH_FAILED: ${errorText || 'Credenciais inválidas'}`);
+        }
+      } catch (innerErr) {
+        if (innerErr instanceof Error && innerErr.message.startsWith('AUTH_FAILED')) {
+          await page.close().catch(() => {});
+          throw innerErr;
+        }
+      }
+      await page.close().catch(() => {});
+      throw originalErr;
+    } finally {
+      await page.close().catch(() => {});
+    }
   }
 
   async shutdown(): Promise<void> {
     logger.info('Encerrando pool de browser...');
 
-    for (const entry of this.pool) {
-      try {
-        await entry.context.close();
-      } catch {}
+    if (this.context) {
+      await this.context.close().catch(() => {});
+      this.context = null;
     }
 
     if (this.browser) {
@@ -175,16 +216,18 @@ class BrowserPool {
       this.browser = null;
     }
 
-    this.pool = [];
+    this.authenticated = false;
+    this.authPromise = null;
+    this.activePagesCount = 0;
     logger.info('Pool de browser encerrado.');
   }
 
   get stats() {
     return {
       pool: {
-        total: this.pool.length,
-        inUse: this.pool.filter((e) => e.inUse).length,
-        available: this.pool.filter((e) => !e.inUse).length,
+        total: this.maxPages,
+        inUse: this.activePagesCount,
+        available: this.maxPages - this.activePagesCount,
       },
       queue: this.requestQueue.stats,
     };

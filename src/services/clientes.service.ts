@@ -1,8 +1,7 @@
-import { Page, BrowserContext } from 'playwright';
-import { ensureAuthenticated, invalidateSession } from '../browser/session.js';
+import { Page } from 'playwright';
+import { withBrowserContext } from '../browser/astrea-http.js';
 import { navigateTo } from '../browser/navigator.js';
-import { browserPool } from '../browser/pool.js';
-import { withRetry, isRetryablePlaywrightError } from '../utils/retry.js';
+import { isRetryablePlaywrightError } from '../utils/retry.js';
 import { logger } from '../utils/logger.js';
 import type { Cliente, ClienteResumido, FiltrosCliente, ServiceResponse, PaginationMeta, DocumentoContato } from '../types/index.js';
 
@@ -244,31 +243,6 @@ function buildSearchPayload(text: string, apiPage: number, limit: number) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// withBrowserContext: adquire e libera context do pool com retry automático
-// ─────────────────────────────────────────────────────────────────────────────
-
-async function withBrowserContext<T>(operation: (context: BrowserContext) => Promise<T>): Promise<T> {
-  const context = await browserPool.acquire();
-  try {
-    return await withRetry(() => operation(context), {
-      maxAttempts: 3,
-      retryIf: (err) => {
-        if (err instanceof Error && err.message.includes('AUTH_FAILED')) return false;
-        return isRetryablePlaywrightError(err as Error);
-      },
-      onRetry: (err, attempt) => {
-        logger.warn({ err: String(err), attempt }, 'Retentando operação do service...');
-        if (err instanceof Error && (err.message.includes('SESSION_EXPIRED') || err.message.includes('login'))) {
-          invalidateSession(context);
-        }
-      },
-    });
-  } finally {
-    await browserPool.release(context);
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Service: Listar / Buscar Clientes por nome
 //
 // GET /api/clientes?nome=NOME
@@ -282,9 +256,7 @@ async function withBrowserContext<T>(operation: (context: BrowserContext) => Pro
 
 export async function listarClientes(filtros?: FiltrosCliente): Promise<ServiceResponse<Cliente[]>> {
   try {
-    const data = await withBrowserContext(async (context) => {
-      const page = await ensureAuthenticated(context);
-
+    const data = await withBrowserContext(async (page) => {
       // Garante que o app AngularJS está carregado (necessário para $http interceptors)
       await navigateTo(page, ANGULAR_PAGE_PATH);
 
@@ -390,9 +362,7 @@ export async function listarClientes(filtros?: FiltrosCliente): Promise<ServiceR
 
 export async function listarTodosClientes(): Promise<ServiceResponse<ClienteResumido[]>> {
   try {
-    const data = await withBrowserContext(async (context) => {
-      const page = await ensureAuthenticated(context);
-
+    const data = await withBrowserContext(async (page) => {
       // Garante que o app AngularJS está carregado
       await navigateTo(page, ANGULAR_PAGE_PATH);
 
@@ -600,9 +570,7 @@ async function buscarDocumentosContato(page: Page, contactId: string): Promise<D
 
 export async function buscarCliente(idOrNomeCpf: string): Promise<ServiceResponse<Cliente>> {
   try {
-    const data = await withBrowserContext(async (context) => {
-      const page = await ensureAuthenticated(context);
-
+    const data = await withBrowserContext(async (page) => {
       // Garante que o app AngularJS está carregado
       await navigateTo(page, ANGULAR_PAGE_PATH);
 

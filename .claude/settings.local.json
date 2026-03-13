@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node scripts/discover-endpoints.mjs)",
+      "Bash(node scripts/discover-endpoints2.mjs)",
+      "Bash(node scripts/discover-endpoints3.mjs)",
+      "Bash(node scripts/discover-endpoints4.mjs)"
+    ]
+  }
+}
