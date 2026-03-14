@@ -9,7 +9,10 @@ WORKDIR /app
 
 # Copia manifestos de dependência e instala
 COPY package*.json ./
-RUN npm ci
+# O Coolify pode injetar NODE_ENV=production em build-time.
+# Forçamos a instalação das devDependencies no estágio de build
+# para garantir a presença de TypeScript e demais ferramentas.
+RUN npm ci --include=dev
 
 # Copia código-fonte e compila
 COPY tsconfig.json ./
