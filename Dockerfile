@@ -22,7 +22,7 @@ RUN npm run build
 # ─────────────────────────────────────────────────────────────────────
 # Stage 2: Runtime
 # ─────────────────────────────────────────────────────────────────────
-FROM mcr.microsoft.com/playwright:v1.44.0-jammy AS runtime
+FROM mcr.microsoft.com/playwright:v1.58.2-jammy AS runtime
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
