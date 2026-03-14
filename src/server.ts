@@ -18,6 +18,7 @@ import tarefasRoutes from './routes/tarefas.routes.js';
 import publicacoesRoutes from './routes/publicacoes.routes.js';
 import atendimentosRoutes from './routes/atendimentos.routes.js';
 import usuariosRoutes from './routes/usuarios.routes.js';
+import mcpRoutes, { shutdownMcpSessions } from './routes/mcp.routes.js';
 
 const app = express();
 
@@ -51,6 +52,7 @@ app.use('/health', healthRoutes);
 // ─────────────────────────────────────────────────────────────────────────────
 // Rotas protegidas por API Key
 // ─────────────────────────────────────────────────────────────────────────────
+app.use('/mcp', apiKeyAuth, mcpRoutes);
 app.use('/api', apiKeyAuth);
 app.use('/api/clientes', clientesRoutes);
 app.use('/api/casos', casosRoutes);
@@ -95,6 +97,7 @@ async function start(): Promise<void> {
       logger.info({ signal }, 'Sinal de encerramento recebido. Encerrando...');
 
       server.close(async () => {
+        await shutdownMcpSessions();
         await browserPool.shutdown();
         logger.info('API encerrada com sucesso.');
         process.exit(0);
