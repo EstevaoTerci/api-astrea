@@ -2,7 +2,8 @@ import { withBrowserContext } from '../browser/astrea-http.js';
 import { navigateTo, waitForElement } from '../browser/navigator.js';
 import { isRetryablePlaywrightError } from '../utils/retry.js';
 import { logger } from '../utils/logger.js';
-import type { Andamento, FiltrosAndamento, ServiceResponse, PaginationMeta } from '../types/index.js';
+import type { Andamento } from '../models/index.js';
+import type { FiltrosAndamento, ServiceResponse, PaginationMeta } from '../types/index.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Seletores reais — aba "Histórico" no detalhe de processo/caso
@@ -33,11 +34,17 @@ export async function listarAndamentos(
       await page.waitForTimeout(1000);
 
       // Clica na aba "Histórico" para ver todos os andamentos
-      await page.getByText('Histórico', { exact: true }).click().catch(() => {});
+      await page
+        .getByText('Histórico', { exact: true })
+        .click()
+        .catch(() => {});
       await page.waitForTimeout(800);
 
       // Tenta expandir todos via "Ver todos"
-      await page.getByText('Ver todos', { exact: true }).click().catch(() => {});
+      await page
+        .getByText('Ver todos', { exact: true })
+        .click()
+        .catch(() => {});
       await page.waitForTimeout(800);
 
       // Extrai itens: cada andamento tem paragraph(data DD/MM/YYYY) + 3º filho (descrição)
@@ -60,7 +67,12 @@ export async function listarAndamentos(
             const desc = descEl?.textContent?.trim() ?? '';
             if (!desc || desc.length < 3) continue;
 
-            result.push({ id: `${pid}-${idx++}`, processoId: pid, data: dateText, descricao: desc });
+            result.push({
+              id: `${pid}-${idx++}`,
+              processoId: pid,
+              data: dateText,
+              descricao: desc,
+            });
           }
           return result;
         }, processoId);
@@ -109,7 +121,10 @@ export async function buscarAndamentosRecentes(
       await waitForElement(page, 'table tbody tr').catch(() => {});
 
       const firstHref = await page
-        .$eval('table tbody tr:first-child td:nth-child(2) a', (el) => el.getAttribute('href') ?? '')
+        .$eval(
+          'table tbody tr:first-child td:nth-child(2) a',
+          (el) => el.getAttribute('href') ?? '',
+        )
         .catch(() => '');
 
       const idMatch = firstHref.match(/folders\/detail\/(\d+)/);
@@ -122,9 +137,15 @@ export async function buscarAndamentosRecentes(
       await navigateTo(page, SELECTORS.FOLDER_DETAIL_PATH(casoId));
       await page.waitForTimeout(1000);
 
-      await page.getByText('Histórico', { exact: true }).click().catch(() => {});
+      await page
+        .getByText('Histórico', { exact: true })
+        .click()
+        .catch(() => {});
       await page.waitForTimeout(800);
-      await page.getByText('Ver todos', { exact: true }).click().catch(() => {});
+      await page
+        .getByText('Ver todos', { exact: true })
+        .click()
+        .catch(() => {});
       await page.waitForTimeout(800);
 
       const rawItems: Array<{ id: string; processoId: string; data: string; descricao: string }> =
@@ -141,7 +162,12 @@ export async function buscarAndamentosRecentes(
             if (!parent || parent.children.length < 3) continue;
             const desc = parent.children[2]?.textContent?.trim() ?? '';
             if (!desc || desc.length < 3) continue;
-            result.push({ id: `${pid}-${idx++}`, processoId: pid, data: dateText, descricao: desc });
+            result.push({
+              id: `${pid}-${idx++}`,
+              processoId: pid,
+              data: dateText,
+              descricao: desc,
+            });
           }
           return result;
         }, casoId);

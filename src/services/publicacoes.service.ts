@@ -2,7 +2,8 @@ import { withBrowserContext } from '../browser/astrea-http.js';
 import { navigateTo, waitForElement } from '../browser/navigator.js';
 import { isRetryablePlaywrightError } from '../utils/retry.js';
 import { logger } from '../utils/logger.js';
-import type { Publicacao, FiltrosPublicacao, ServiceResponse, PaginationMeta } from '../types/index.js';
+import type { Publicacao } from '../models/index.js';
+import type { FiltrosPublicacao, ServiceResponse, PaginationMeta } from '../types/index.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Seletores reais — página de publicações (clippings)

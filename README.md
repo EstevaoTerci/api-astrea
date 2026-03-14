@@ -4,15 +4,15 @@ API REST que expõe dados do sistema jurídico [Astrea](https://astrea.net.br) v
 
 ## Endpoints
 
-| Método | Rota | Descrição |
-|--------|------|-----------|
-| `GET` | `/health` | Health check |
-| `GET` | `/api/clientes` | Buscar clientes por nome (`?nome=`) |
-| `GET` | `/api/clientes/todos` | Lista completa de todos os clientes |
-| `GET` | `/api/clientes/:id` | Detalhes do cliente (inclui documentos) |
-| `GET` | `/api/clientes/:id/casos` | Casos/processos do cliente |
-| `GET` | `/api/casos/:id` | Detalhes completos de um caso/processo |
-| `GET` | `/api/casos/:id/andamentos` | Andamentos do caso |
+| Método | Rota                        | Descrição                               |
+| ------ | --------------------------- | --------------------------------------- |
+| `GET`  | `/health`                   | Health check                            |
+| `GET`  | `/api/clientes`             | Buscar clientes por nome (`?nome=`)     |
+| `GET`  | `/api/clientes/todos`       | Lista completa de todos os clientes     |
+| `GET`  | `/api/clientes/:id`         | Detalhes do cliente (inclui documentos) |
+| `GET`  | `/api/clientes/:id/casos`   | Casos/processos do cliente              |
+| `GET`  | `/api/casos/:id`            | Detalhes completos de um caso/processo  |
+| `GET`  | `/api/casos/:id/andamentos` | Andamentos do caso                      |
 
 ## Autenticação
 
@@ -24,27 +24,63 @@ Todas as rotas `/api/*` requerem header `x-api-key` com o valor definido em `API
 # 1. Copiar e preencher variáveis de ambiente
 cp .env.example .env
 
-# 2. Subir com Docker Compose
-docker compose up -d --build
+# 2. Subir com Docker Compose local
+docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
 ```
 
-### Coolify
+## Coolify
 
-1. Crie uma nova stack no Coolify
-2. Use o `docker-compose.yml` do repositório
-3. Configure as variáveis de ambiente no painel do Coolify (mesmas do `.env.example`)
+Use o `docker-compose.yml` do repositório como arquivo principal da resource `Docker Compose`.
+
+1. Crie uma nova resource do tipo `Docker Compose` no Coolify apontando para este repositório.
+2. Use apenas o arquivo `docker-compose.yml` no deploy da VPS.
+3. Configure as variáveis de ambiente no painel do Coolify. O compose já declara todas explicitamente para o UI detectá-las.
+4. Mantenha `TRUST_PROXY=1` quando a API ficar atrás do proxy do Coolify.
+5. Se a API for usada apenas por `n8n` e outros serviços internos, prefira acesso interno em rede e não publique porta/URL desnecessariamente.
+
+### Variáveis mínimas de produção
+
+- `ASTREA_EMAIL`
+- `ASTREA_PASSWORD`
+- `API_KEY`
+
+### Recomendação inicial para VPS pequena
+
+- `NODE_ENV=production`
+- `TRUST_PROXY=1`
+- `BROWSER_HEADLESS=true`
+- `BROWSER_POOL_SIZE=3`
+- `BROWSER_IDLE_TTL_MS=900000`
+- `RATE_LIMIT_MAX_REQUESTS=60`
+
+### Rede com n8n
+
+Se o `n8n` estiver na mesma stack/rede do Coolify, prefira chamadas internas na porta `3000`.
+
+Se o `n8n` estiver em outra stack, as opções práticas são:
+
+- expor um domínio protegido por `x-api-key`
+- ligar ambas as stacks a uma rede compartilhada no Docker/Coolify
+
+## Observações de produção
+
+- O container usa o Chromium do sistema e informa explicitamente o caminho ao Playwright.
+- O compose principal não fixa `container_name`, o que evita conflito em re-deploys do Coolify.
+- O compose principal não publica porta no host. Para rodar localmente, use o override `docker-compose.local.yml`.
+- O projeto usa um único browser/contexto com sessão compartilhada e fecha cada aba ao final da requisição.
+- O browser usa lazy init e é encerrado automaticamente após o TTL de ociosidade configurado.
 
 ## Desenvolvimento local
 
 ```bash
 npm install
-cp .env.example .env  # Preencha com suas credenciais
+cp .env.example .env
 npm run dev
 ```
 
 ## Stack
 
-- **Runtime**: Node.js 22 + TypeScript
-- **Framework**: Express.js
-- **Browser**: Playwright (Chromium headless)
-- **Deploy**: Docker multi-stage build (Alpine)
+- Runtime: Node.js 22 + TypeScript
+- Framework: Express.js
+- Browser: Playwright com Chromium do sistema
+- Deploy: Docker multi-stage build

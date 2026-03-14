@@ -21,6 +21,10 @@ import usuariosRoutes from './routes/usuarios.routes.js';
 
 const app = express();
 
+if (env.TRUST_PROXY > 0) {
+  app.set('trust proxy', env.TRUST_PROXY);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Segurança e parsing
 // ─────────────────────────────────────────────────────────────────────────────
@@ -72,9 +76,6 @@ app.use(errorHandler);
 async function start(): Promise<void> {
   try {
     logger.info('Iniciando API Astrea...');
-
-    // Inicializa o pool de browser antes de aceitar requisições
-    await browserPool.initialize();
 
     const server = app.listen(env.PORT, () => {
       logger.info(

@@ -3,30 +3,47 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: api-astrea
     restart: unless-stopped
-    ports:
-      - "${PORT:-3000}:3000"
-    env_file:
-      - .env
+    init: true
     environment:
-      NODE_ENV: production
-    deploy:
-      resources:
-        limits:
-          memory: 1200M
-          cpus: "1.5"
-        reservations:
-          memory: 512M
-    shm_size: "256mb"  # Necessário para o Chromium não travar
+      ASTREA_EMAIL: ${ASTREA_EMAIL:?ASTREA_EMAIL is required}
+      ASTREA_PASSWORD: ${ASTREA_PASSWORD:?ASTREA_PASSWORD is required}
+      API_KEY: ${API_KEY:?API_KEY is required}
+      PORT: ${PORT:-3000}
+      NODE_ENV: ${NODE_ENV:-production}
+      TRUST_PROXY: ${TRUST_PROXY:-1}
+      BROWSER_POOL_SIZE: ${BROWSER_POOL_SIZE:-3}
+      BROWSER_TIMEOUT_MS: ${BROWSER_TIMEOUT_MS:-30000}
+      BROWSER_IDLE_TTL_MS: ${BROWSER_IDLE_TTL_MS:-900000}
+      BROWSER_EXECUTABLE_PATH: ${BROWSER_EXECUTABLE_PATH:-/usr/bin/chromium}
+      BROWSER_HEADLESS: ${BROWSER_HEADLESS:-true}
+      SESSION_REUSE: ${SESSION_REUSE:-true}
+      RATE_LIMIT_WINDOW_MS: ${RATE_LIMIT_WINDOW_MS:-60000}
+      RATE_LIMIT_MAX_REQUESTS: ${RATE_LIMIT_MAX_REQUESTS:-60}
+      QUEUE_MAX_SIZE: ${QUEUE_MAX_SIZE:-20}
+      QUEUE_TIMEOUT_MS: ${QUEUE_TIMEOUT_MS:-60000}
+      ASTREA_TENANT_ID: ${ASTREA_TENANT_ID:-6692712561442816}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GOOGLE_MODEL: ${GOOGLE_MODEL:-}
+      LLM_PROVIDER: ${LLM_PROVIDER:-}
+      DEVELOPER_EMAIL: ${DEVELOPER_EMAIL:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+    shm_size: '512mb'
+    stop_grace_period: 40s
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      test: ['CMD', 'wget', '-qO-', 'http://localhost:3000/health']
       interval: 30s
       timeout: 10s
       start_period: 60s
       retries: 3
     logging:
-      driver: "json-file"
+      driver: 'json-file'
       options:
-        max-size: "10m"
-        max-file: "3"
+        max-size: '10m'
+        max-file: '3'

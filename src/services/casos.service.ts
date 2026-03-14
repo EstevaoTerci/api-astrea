@@ -8,8 +8,9 @@ import type {
   ParteProcesso,
   HistoricoItem,
   ApensoProcesso,
-} from '../models/caso-processo.js';
-import type { Caso, FiltrosCaso, ServiceResponse, PaginationMeta } from '../types/index.js';
+  Caso,
+} from '../models/index.js';
+import type { FiltrosCaso, ServiceResponse, PaginationMeta } from '../types/index.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes  –  APIs REST internas do Astrea
@@ -56,19 +57,19 @@ interface AstreaFolderDetail {
   id: number;
   title: string;
   isLawsuit: boolean;
-  status: string;                 // "Active", "Closed", "Archived"
-  caseType: string;               // "C_CASE", "C_LAWSUIT"
+  status: string; // "Active", "Closed", "Archived"
+  caseType: string; // "C_CASE", "C_LAWSUIT"
   description?: string;
   observation?: string;
-  createDate?: number;            // Unix timestamp ms
-  openDate?: number;              // Unix timestamp ms (distribuição do processo)
+  createDate?: number; // Unix timestamp ms
+  openDate?: number; // Unix timestamp ms (distribuição do processo)
 
   // Dados processuais (somente quando isLawsuit=true)
-  lawsuitNumber?: string;         // Número CNJ
-  courtName?: string;             // Ex: "BARRA DE SÃO FRANCISCO"
-  courtFormatted?: string;        // Ex: "1ª vara civel BARRA DE SÃO FRANCISCO"
+  lawsuitNumber?: string; // Número CNJ
+  courtName?: string; // Ex: "BARRA DE SÃO FRANCISCO"
+  courtFormatted?: string; // Ex: "1ª vara civel BARRA DE SÃO FRANCISCO"
   divisionNumber?: number;
-  divisionName?: string;          // Ex: "vara civel"
+  divisionName?: string; // Ex: "vara civel"
   lawsuitInstanceNumber?: number; // 1 = 1ª instância
   urlLawsuit?: string;
   automaticLawsuit?: boolean;
@@ -113,8 +114,8 @@ interface AstreaFolderDetail {
 
 interface AstreaHistoricalItem {
   id: number;
-  date: string;                   // ISO-8601
-  type: string;                   // "MANUALLY", "DONE_TASK", "APPOINTMENT", "AUTOMATIC", etc.
+  date: string; // ISO-8601
+  type: string; // "MANUALLY", "DONE_TASK", "APPOINTMENT", "AUTOMATIC", etc.
   description: string;
   descriptionTranslation?: string;
   idParent?: number;
@@ -362,7 +363,7 @@ async function buildCasoProcesso(
           juizo: folder.courtFormatted ?? undefined,
           vara: folder.divisionNumber
             ? `${folder.divisionNumber}ª ${folder.divisionName ?? 'vara'}`
-            : folder.divisionName ?? undefined,
+            : (folder.divisionName ?? undefined),
           tribunal: folder.courtName ?? undefined,
           instancia: mapInstanceLabel(folder.lawsuitInstanceNumber),
           distribuidoEm: formatTimestamp(folder.openDate),
@@ -375,8 +376,7 @@ async function buildCasoProcesso(
     historico: mapHistorical(historicals),
 
     // Apensos
-    apensos:
-      attachedResp ? mapApensos(attachedResp, String(folder.id)) : undefined,
+    apensos: attachedResp ? mapApensos(attachedResp, String(folder.id)) : undefined,
 
     // Contadores
     totalDocumentos: stats?.documents ?? folder.attachedsCount ?? undefined,
@@ -440,16 +440,17 @@ export async function buscarCaso(id: string): Promise<ServiceResponse<CasoProces
       ]);
 
       const historicals =
-        histResult.status === 'fulfilled' ? histResult.value.historicals ?? [] : [];
+        histResult.status === 'fulfilled' ? (histResult.value.historicals ?? []) : [];
       if (histResult.status === 'rejected') {
-        logger.warn({ err: String(histResult.reason) }, 'Falha ao buscar histórico — continuando sem histórico');
+        logger.warn(
+          { err: String(histResult.reason) },
+          'Falha ao buscar histórico — continuando sem histórico',
+        );
       }
 
-      const attacheds =
-        attachedResult.status === 'fulfilled' ? attachedResult.value : null;
+      const attacheds = attachedResult.status === 'fulfilled' ? attachedResult.value : null;
 
-      const stats =
-        statsResult.status === 'fulfilled' ? statsResult.value : null;
+      const stats = statsResult.status === 'fulfilled' ? statsResult.value : null;
 
       return buildCasoProcesso(page, folder, historicals, attacheds, stats);
     });
@@ -461,7 +462,8 @@ export async function buscarCaso(id: string): Promise<ServiceResponse<CasoProces
     return {
       ok: false,
       error: {
-        message: err instanceof Error ? err.message.replace(/^NOT_FOUND:\s*/, '') : 'Erro desconhecido',
+        message:
+          err instanceof Error ? err.message.replace(/^NOT_FOUND:\s*/, '') : 'Erro desconhecido',
         code: isNotFound ? 'NOT_FOUND' : 'SCRAPE_ERROR',
         retryable: !isNotFound,
       },
@@ -485,13 +487,13 @@ export async function listarCasos(filtros?: FiltrosCaso): Promise<ServiceRespons
       await navigateTo(page, '/#/main/folders/[,,]');
 
       // Aguarda a tabela carregar
-      await page
-        .waitForSelector('table tbody tr', { timeout: 10000 })
-        .catch(() => {});
+      await page.waitForSelector('table tbody tr', { timeout: 10000 }).catch(() => {});
 
       // Aplica busca textual se houver filtro
       if (filtros?.clienteId) {
-        await page.fill('input[placeholder="Digite algo para pesquisar"]', filtros.clienteId).catch(() => {});
+        await page
+          .fill('input[placeholder="Digite algo para pesquisar"]', filtros.clienteId)
+          .catch(() => {});
         await page.waitForTimeout(2000);
       }
 
@@ -510,20 +512,12 @@ export async function listarCasos(filtros?: FiltrosCaso): Promise<ServiceRespons
         const id = idMatch?.[1] ?? '';
 
         const clienteNome =
-          (
-            await row
-              .$eval('td:nth-child(3)', (el) => el.textContent ?? '')
-              .catch(() => '')
-          )
+          (await row.$eval('td:nth-child(3)', (el) => el.textContent ?? '').catch(() => ''))
             ?.replace(/\s+/g, ' ')
             .trim() || undefined;
 
         const updatedAt =
-          (
-            await row
-              .$eval('td:nth-child(5)', (el) => el.textContent ?? '')
-              .catch(() => '')
-          )
+          (await row.$eval('td:nth-child(5)', (el) => el.textContent ?? '').catch(() => ''))
             ?.replace(/\s+/g, ' ')
             .trim() || undefined;
 
@@ -603,9 +597,7 @@ export async function buscarCasosPorCliente(
 
       // Aguarda a tabela de processos/casos carregar
       await page.waitForTimeout(3000);
-      await page
-        .waitForSelector('table tbody tr', { timeout: 10000 })
-        .catch(() => {});
+      await page.waitForSelector('table tbody tr', { timeout: 10000 }).catch(() => {});
 
       // ── Passo 2: Extrai IDs dos casos a partir dos links na tabela ──
       const caseIds: string[] = await page.evaluate(() => {
@@ -654,11 +646,9 @@ export async function buscarCasosPorCliente(
           ]);
 
           const historicals =
-            histResult.status === 'fulfilled' ? histResult.value.historicals ?? [] : [];
-          const attacheds =
-            attachedResult.status === 'fulfilled' ? attachedResult.value : null;
-          const stats =
-            statsResult.status === 'fulfilled' ? statsResult.value : null;
+            histResult.status === 'fulfilled' ? (histResult.value.historicals ?? []) : [];
+          const attacheds = attachedResult.status === 'fulfilled' ? attachedResult.value : null;
+          const stats = statsResult.status === 'fulfilled' ? statsResult.value : null;
 
           const caso = await buildCasoProcesso(page, folder, historicals, attacheds, stats);
           casos.push(caso);

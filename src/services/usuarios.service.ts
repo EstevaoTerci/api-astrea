@@ -1,13 +1,10 @@
 import { navigateTo } from '../browser/navigator.js';
-import {
-  withBrowserContext,
-  gapiCall,
-  WORKSPACE_PAGE_PATH,
-} from '../browser/astrea-http.js';
+import { withBrowserContext, gapiCall, WORKSPACE_PAGE_PATH } from '../browser/astrea-http.js';
 import { TtlCache } from '../utils/cache.js';
 import { logger } from '../utils/logger.js';
 import { isRetryablePlaywrightError } from '../utils/retry.js';
-import type { Usuario, ServiceResponse } from '../types/index.js';
+import type { Usuario } from '../models/index.js';
+import type { ServiceResponse } from '../types/index.js';
 
 // Cache de 10 minutos para a lista de usuários
 const cache = new TtlCache<Usuario[]>(10 * 60_000);
@@ -49,11 +46,12 @@ function mapGcpUserToUsuario(u: GcpUser): Usuario {
     admin: u.admin ?? undefined,
     status: u.status ?? undefined,
     perfil: u.perfil ?? u.profile ?? undefined,
-    contatoId: u.contatoId != null
-      ? String(u.contatoId)
-      : u.contactId != null
-        ? String(u.contactId)
-        : undefined,
+    contatoId:
+      u.contatoId != null
+        ? String(u.contatoId)
+        : u.contactId != null
+          ? String(u.contactId)
+          : undefined,
   };
 }
 
@@ -73,12 +71,7 @@ export async function listarUsuarios(): Promise<ServiceResponse<Usuario[]>> {
     const usuarios = await withBrowserContext(async (page) => {
       await navigateTo(page, WORKSPACE_PAGE_PATH);
 
-      const res = await gapiCall<any>(
-        page,
-        'users.userService',
-        'getAllUsers',
-        {},
-      );
+      const res = await gapiCall<any>(page, 'users.userService', 'getAllUsers', {});
 
       // Response may be array directly, or wrapped in items/users/data
       let rawUsers: GcpUser[] = [];

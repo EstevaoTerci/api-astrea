@@ -1,18 +1,9 @@
 import { navigateTo } from '../browser/navigator.js';
-import {
-  withBrowserContext,
-  astreaApiPost,
-  ANGULAR_PAGE_PATH,
-} from '../browser/astrea-http.js';
+import { withBrowserContext, astreaApiPost, ANGULAR_PAGE_PATH } from '../browser/astrea-http.js';
 import { logger } from '../utils/logger.js';
 import { isRetryablePlaywrightError } from '../utils/retry.js';
-import type {
-  Atendimento,
-  CriarAtendimentoInput,
-  FiltrosAtendimento,
-  ServiceResponse,
-  PaginationMeta,
-} from '../types/index.js';
+import type { Atendimento, CriarAtendimentoInput } from '../models/index.js';
+import type { FiltrosAtendimento, ServiceResponse, PaginationMeta } from '../types/index.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Tipos internos REST

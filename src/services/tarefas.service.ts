@@ -8,14 +8,8 @@ import {
 } from '../browser/astrea-http.js';
 import { logger } from '../utils/logger.js';
 import { isRetryablePlaywrightError } from '../utils/retry.js';
-import type {
-  Tarefa,
-  CriarTarefaInput,
-  AtualizarTarefaInput,
-  FiltrosTarefa,
-  ServiceResponse,
-  PaginationMeta,
-} from '../types/index.js';
+import type { Tarefa, CriarTarefaInput, AtualizarTarefaInput } from '../models/index.js';
+import type { FiltrosTarefa, ServiceResponse, PaginationMeta } from '../types/index.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Tipos internos GCP
@@ -69,11 +63,7 @@ function mapGcpTaskToTarefa(task: GcpTask): Tarefa {
     prazo: task.dueDate ?? undefined,
     responsavelId: task.responsibleId ? String(task.responsibleId) : undefined,
     responsavel: task.responsibleName ?? undefined,
-    casoId: task.casoId
-      ? String(task.casoId)
-      : task.caseId
-        ? String(task.caseId)
-        : undefined,
+    casoId: task.casoId ? String(task.casoId) : task.caseId ? String(task.caseId) : undefined,
     listaId: task.currentListId ? String(task.currentListId) : undefined,
     createdAt: task.createDate ?? undefined,
   };
@@ -84,12 +74,7 @@ function mapGcpTaskToTarefa(task: GcpTask): Tarefa {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function getAllTaskLists(page: Page, userId: string): Promise<GcpTaskList[]> {
-  const res = await gapiCall<any>(
-    page,
-    'workspace.taskListService',
-    'getAllTaskLists',
-    { userId },
-  );
+  const res = await gapiCall<any>(page, 'workspace.taskListService', 'getAllTaskLists', { userId });
   if (Array.isArray(res)) return res as GcpTaskList[];
   if (Array.isArray(res?.items)) return res.items as GcpTaskList[];
   if (Array.isArray(res?.taskLists)) return res.taskLists as GcpTaskList[];
@@ -97,12 +82,9 @@ async function getAllTaskLists(page: Page, userId: string): Promise<GcpTaskList[
 }
 
 async function getTasksFromList(page: Page, taskListId: string): Promise<GcpTask[]> {
-  const res = await gapiCall<any>(
-    page,
-    'workspace.taskListService',
-    'getTaskListWithAllTasks',
-    { taskListId },
-  );
+  const res = await gapiCall<any>(page, 'workspace.taskListService', 'getTaskListWithAllTasks', {
+    taskListId,
+  });
   if (Array.isArray(res?.tasks)) return res.tasks as GcpTask[];
   if (Array.isArray(res?.taskList)) return res.taskList as GcpTask[];
   if (Array.isArray(res?.items)) return res.items as GcpTask[];
@@ -154,9 +136,7 @@ export async function listarTarefas(filtros?: FiltrosTarefa): Promise<ServiceRes
 
       if (filtros?.responsavel) {
         const query = filtros.responsavel.toLowerCase();
-        filtered = filtered.filter((t) =>
-          t.responsavel?.toLowerCase().includes(query),
-        );
+        filtered = filtered.filter((t) => t.responsavel?.toLowerCase().includes(query));
       }
 
       if (filtros?.prioridade) {
@@ -286,12 +266,10 @@ export async function atualizarTarefa(
         { taskId: id, userId: String(userId) },
       );
 
-      const currentListId =
-        current?.currentListId ?? current?.idCurrentTaskList ?? '';
+      const currentListId = current?.currentListId ?? current?.idCurrentTaskList ?? '';
       const currentResponsibleId =
         current?.responsibleId ?? current?.taskInfoDTO?.responsibleId ?? userId;
-      const currentOwnerId =
-        current?.ownerId ?? current?.taskInfoDTO?.ownerId ?? userId;
+      const currentOwnerId = current?.ownerId ?? current?.taskInfoDTO?.ownerId ?? userId;
       const currentCreateDate =
         current?.createDate ?? current?.taskInfoDTO?.createDate ?? new Date().toISOString();
 
@@ -308,8 +286,7 @@ export async function atualizarTarefa(
           ownerId: String(currentOwnerId),
           done,
           taskId: id,
-          priority:
-            input.prioridade !== undefined ? input.prioridade : (current?.priority ?? 0),
+          priority: input.prioridade !== undefined ? input.prioridade : (current?.priority ?? 0),
           ...(input.prazo !== undefined
             ? { dueDate: input.prazo }
             : current?.dueDate
@@ -338,8 +315,7 @@ export async function atualizarTarefa(
         ownerId: currentOwnerId,
         createDate: currentCreateDate,
         currentListId: String(currentListId),
-        priority:
-          input.prioridade !== undefined ? input.prioridade : (current?.priority ?? 0),
+        priority: input.prioridade !== undefined ? input.prioridade : (current?.priority ?? 0),
         casoId: current?.casoId,
         ...(res && typeof res === 'object' ? res : {}),
       };

@@ -1,0 +1,4 @@
+services:
+  api-astrea:
+    ports:
+      - '${PORT:-3000}:3000'

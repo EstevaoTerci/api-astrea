@@ -3,7 +3,8 @@ import { withBrowserContext } from '../browser/astrea-http.js';
 import { navigateTo } from '../browser/navigator.js';
 import { isRetryablePlaywrightError } from '../utils/retry.js';
 import { logger } from '../utils/logger.js';
-import type { Cliente, ClienteResumido, FiltrosCliente, ServiceResponse, PaginationMeta, DocumentoContato } from '../types/index.js';
+import type { Cliente, ClienteResumido, DocumentoContato } from '../models/index.js';
+import type { FiltrosCliente, ServiceResponse, PaginationMeta } from '../types/index.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes
@@ -27,15 +28,15 @@ const ANGULAR_PAGE_PATH = '/#/main/contacts';
 
 interface AstreaPhone {
   typeEnum?: string;
-  number?: string;    // campo em /details
+  number?: string; // campo em /details
   telephone?: string; // campo em /all (lista)
   operator?: string;
 }
 
 interface AstreaEmail {
   typeEnum?: string;
-  address?: string;   // campo em /details
-  email?: string;     // campo em /all (lista)
+  address?: string; // campo em /details
+  email?: string; // campo em /all (lista)
 }
 
 interface AstreaWebSite {
@@ -158,7 +159,12 @@ function mapContactDetails(d: AstreaContactDetails): Cliente {
     endereco,
     dataNascimento: d.birthDate ?? undefined,
     origem: d.clientOrigin ?? undefined,
-    tipo: d.contactKind === 'PERSON' ? 'pessoa_fisica' : d.contactKind === 'COMPANY' ? 'pessoa_juridica' : undefined,
+    tipo:
+      d.contactKind === 'PERSON'
+        ? 'pessoa_fisica'
+        : d.contactKind === 'COMPANY'
+          ? 'pessoa_juridica'
+          : undefined,
     createdAt: d.createdAt ? new Date(d.createdAt).toISOString() : undefined,
   };
 }
@@ -169,17 +175,19 @@ function mapContactListItem(item: AstreaContactListItem): Cliente {
     item.telephones?.[0]?.telephone ??
     undefined;
 
-  const email =
-    item.emails?.[0]?.address ??
-    (item.emails?.[0] as any)?.email ??
-    undefined;
+  const email = item.emails?.[0]?.address ?? (item.emails?.[0] as any)?.email ?? undefined;
 
   return {
     id: String(item.id),
     nome: item.name?.trim() ?? '',
     email,
     telefone,
-    tipo: item.contactKind === 'PERSON' ? 'pessoa_fisica' : item.contactKind === 'COMPANY' ? 'pessoa_juridica' : undefined,
+    tipo:
+      item.contactKind === 'PERSON'
+        ? 'pessoa_fisica'
+        : item.contactKind === 'COMPANY'
+          ? 'pessoa_juridica'
+          : undefined,
   };
 }
 
@@ -196,23 +204,22 @@ function mapContactListItemResumido(item: AstreaContactListItem): ClienteResumid
     item.telephones?.[0]?.telephone ??
     undefined;
 
-  const email =
-    item.emails?.[0]?.address ??
-    (item.emails?.[0] as any)?.email ??
-    undefined;
+  const email = item.emails?.[0]?.address ?? (item.emails?.[0] as any)?.email ?? undefined;
 
-  const endereco =
-    item.addresses?.[0]?.display ??
-    undefined;
+  const endereco = item.addresses?.[0]?.display ?? undefined;
 
-  const etiquetas =
-    item.tags?.map((t) => t.name ?? '').filter(Boolean) ?? undefined;
+  const etiquetas = item.tags?.map((t) => t.name ?? '').filter(Boolean) ?? undefined;
 
   return {
     id: String(item.id),
     nome: item.name?.trim() ?? '',
     classificacao: item.classificationName ?? undefined,
-    tipo: item.contactKind === 'PERSON' ? 'pessoa_fisica' : item.contactKind === 'COMPANY' ? 'pessoa_juridica' : undefined,
+    tipo:
+      item.contactKind === 'PERSON'
+        ? 'pessoa_fisica'
+        : item.contactKind === 'COMPANY'
+          ? 'pessoa_juridica'
+          : undefined,
     telefone,
     email,
     endereco,
@@ -254,7 +261,9 @@ function buildSearchPayload(text: string, apiPage: number, limit: number) {
 //     GET /api/v2/contact/{id}/details → enriquece com urlDrive, cpfCnpj, etc.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function listarClientes(filtros?: FiltrosCliente): Promise<ServiceResponse<Cliente[]>> {
+export async function listarClientes(
+  filtros?: FiltrosCliente,
+): Promise<ServiceResponse<Cliente[]>> {
   try {
     const data = await withBrowserContext(async (page) => {
       // Garante que o app AngularJS está carregado (necessário para $http interceptors)
@@ -505,7 +514,7 @@ async function buscarDocumentosContato(page: Page, contactId: string): Promise<D
   );
 
   // Extrair documentos do scope com paginação automática
-  const rawDocs = await page.evaluate(async () => {
+  const rawDocs = (await page.evaluate(async () => {
     const el = document.querySelector('document-list');
     if (!el) return [];
 
@@ -546,10 +555,13 @@ async function buscarDocumentosContato(page: Page, contactId: string): Promise<D
         ? { id: d.caseDTO.id, title: d.caseDTO.title, caseType: d.caseDTO.caseType }
         : null,
     }));
-  }) as AstreaDocumentScope[];
+  })) as AstreaDocumentScope[];
 
   const documentos = rawDocs.map(mapDocumentScope);
-  logger.debug({ contactId, count: documentos.length }, 'Documentos do contato obtidos com sucesso.');
+  logger.debug(
+    { contactId, count: documentos.length },
+    'Documentos do contato obtidos com sucesso.',
+  );
   return documentos;
 }
 
@@ -619,7 +631,8 @@ export async function buscarCliente(idOrNomeCpf: string): Promise<ServiceRespons
     return {
       ok: false,
       error: {
-        message: err instanceof Error ? err.message.replace(/^NOT_FOUND:\s*/, '') : 'Erro desconhecido',
+        message:
+          err instanceof Error ? err.message.replace(/^NOT_FOUND:\s*/, '') : 'Erro desconhecido',
         code: isNotFound ? 'NOT_FOUND' : 'SCRAPE_ERROR',
         retryable: !isNotFound,
       },

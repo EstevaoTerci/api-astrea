@@ -5,9 +5,18 @@ import { browserPool } from '../browser/pool.js';
 import { logger } from '../utils/logger.js';
 
 // Import all service functions
-import { listarClientes, buscarCliente as buscarClientePorId, listarTodosClientes } from '../services/clientes.service.js';
+import {
+  listarClientes,
+  buscarCliente as buscarClientePorId,
+  listarTodosClientes,
+} from '../services/clientes.service.js';
 import { buscarCaso as buscarCasoPorId, buscarCasosPorCliente } from '../services/casos.service.js';
-import { listarTarefas, criarTarefa, atualizarTarefa, buscarTarefasPorProcesso } from '../services/tarefas.service.js';
+import {
+  listarTarefas,
+  criarTarefa,
+  atualizarTarefa,
+  buscarTarefasPorProcesso,
+} from '../services/tarefas.service.js';
 import { listarAtendimentos, criarAtendimento } from '../services/atendimentos.service.js';
 import { listarUsuarios } from '../services/usuarios.service.js';
 
@@ -35,9 +44,7 @@ server.tool(
     if (!result.ok) {
       return { content: [{ type: 'text', text: `Erro: ${result.error.message}` }], isError: true };
     }
-    const output = result.meta
-      ? { data: result.data, meta: result.meta }
-      : result.data;
+    const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
     return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
   },
 );
@@ -53,9 +60,7 @@ server.tool(
     if (!result.ok) {
       return { content: [{ type: 'text', text: `Erro: ${result.error.message}` }], isError: true };
     }
-    const output = result.meta
-      ? { data: result.data, meta: result.meta }
-      : result.data;
+    const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
     return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
   },
 );
@@ -69,9 +74,7 @@ server.tool(
     if (!result.ok) {
       return { content: [{ type: 'text', text: `Erro: ${result.error.message}` }], isError: true };
     }
-    const output = result.meta
-      ? { data: result.data, meta: result.meta }
-      : result.data;
+    const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
     return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
   },
 );
@@ -91,9 +94,7 @@ server.tool(
     if (!result.ok) {
       return { content: [{ type: 'text', text: `Erro: ${result.error.message}` }], isError: true };
     }
-    const output = result.meta
-      ? { data: result.data, meta: result.meta }
-      : result.data;
+    const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
     return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
   },
 );
@@ -109,9 +110,7 @@ server.tool(
     if (!result.ok) {
       return { content: [{ type: 'text', text: `Erro: ${result.error.message}` }], isError: true };
     }
-    const output = result.meta
-      ? { data: result.data, meta: result.meta }
-      : result.data;
+    const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
     return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
   },
 );
@@ -135,9 +134,7 @@ server.tool(
     if (!result.ok) {
       return { content: [{ type: 'text', text: `Erro: ${result.error.message}` }], isError: true };
     }
-    const output = result.meta
-      ? { data: result.data, meta: result.meta }
-      : result.data;
+    const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
     return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
   },
 );
@@ -158,9 +155,7 @@ server.tool(
     if (!result.ok) {
       return { content: [{ type: 'text', text: `Erro: ${result.error.message}` }], isError: true };
     }
-    const output = result.meta
-      ? { data: result.data, meta: result.meta }
-      : result.data;
+    const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
     return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
   },
 );
@@ -182,9 +177,7 @@ server.tool(
     if (!result.ok) {
       return { content: [{ type: 'text', text: `Erro: ${result.error.message}` }], isError: true };
     }
-    const output = result.meta
-      ? { data: result.data, meta: result.meta }
-      : result.data;
+    const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
     return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
   },
 );
@@ -200,9 +193,7 @@ server.tool(
     if (!result.ok) {
       return { content: [{ type: 'text', text: `Erro: ${result.error.message}` }], isError: true };
     }
-    const output = result.meta
-      ? { data: result.data, meta: result.meta }
-      : result.data;
+    const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
     return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
   },
 );
@@ -228,9 +219,7 @@ server.tool(
     if (!result.ok) {
       return { content: [{ type: 'text', text: `Erro: ${result.error.message}` }], isError: true };
     }
-    const output = result.meta
-      ? { data: result.data, meta: result.meta }
-      : result.data;
+    const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
     return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
   },
 );
@@ -253,9 +242,7 @@ server.tool(
     if (!result.ok) {
       return { content: [{ type: 'text', text: `Erro: ${result.error.message}` }], isError: true };
     }
-    const output = result.meta
-      ? { data: result.data, meta: result.meta }
-      : result.data;
+    const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
     return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
   },
 );
@@ -264,21 +251,14 @@ server.tool(
 // Usuarios
 // ─────────────────────────────────────────────────────────────────────────────
 
-server.tool(
-  'listar_usuarios',
-  'Lista usuários/advogados do escritório.',
-  {},
-  async () => {
-    const result = await listarUsuarios();
-    if (!result.ok) {
-      return { content: [{ type: 'text', text: `Erro: ${result.error.message}` }], isError: true };
-    }
-    const output = result.meta
-      ? { data: result.data, meta: result.meta }
-      : result.data;
-    return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
-  },
-);
+server.tool('listar_usuarios', 'Lista usuários/advogados do escritório.', {}, async () => {
+  const result = await listarUsuarios();
+  if (!result.ok) {
+    return { content: [{ type: 'text', text: `Erro: ${result.error.message}` }], isError: true };
+  }
+  const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
+  return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Startup
@@ -286,10 +266,20 @@ server.tool(
 
 async function main() {
   try {
-    await browserPool.initialize();
     const transport = new StdioServerTransport();
     await server.connect(transport);
     logger.info('Servidor MCP Astrea iniciado via stdio');
+
+    const shutdown = async (signal: string) => {
+      logger.info({ signal }, 'Encerrando servidor MCP Astrea...');
+      await browserPool.shutdown().catch((err) => {
+        logger.warn({ err }, 'Falha ao encerrar browser pool do MCP.');
+      });
+      process.exit(0);
+    };
+
+    process.on('SIGTERM', () => void shutdown('SIGTERM'));
+    process.on('SIGINT', () => void shutdown('SIGINT'));
   } catch (err) {
     logger.fatal({ err }, 'Falha ao iniciar servidor MCP');
     process.exit(1);

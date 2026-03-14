@@ -22,9 +22,12 @@ class BrowserPool {
   private initPromise: Promise<void> | null = null;
   private readonly requestQueue: RequestQueue;
   private activePagesCount = 0;
+  private idleShutdownTimer: NodeJS.Timeout | null = null;
+  private readonly idleTtlMs: number;
 
   constructor(maxPages: number) {
     this.maxPages = maxPages;
+    this.idleTtlMs = env.BROWSER_IDLE_TTL_MS;
     this.requestQueue = new RequestQueue({
       maxConcurrent: maxPages,
       maxQueueSize: env.QUEUE_MAX_SIZE,
@@ -34,15 +37,25 @@ class BrowserPool {
 
   async initialize(): Promise<void> {
     if (this.initPromise) return this.initPromise;
-    this.initPromise = this._initialize();
+    this.initPromise = this._initialize().catch((err) => {
+      this.initPromise = null;
+      throw err;
+    });
     return this.initPromise;
   }
 
   private async _initialize(): Promise<void> {
+    this.clearIdleShutdownTimer();
+
+    if (this.browser && this.context) {
+      return;
+    }
+
     logger.info({ maxPages: this.maxPages }, 'Iniciando browser Chromium (single-context)...');
 
     this.browser = await chromium.launch({
       headless: env.BROWSER_HEADLESS,
+      executablePath: env.BROWSER_EXECUTABLE_PATH || undefined,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -62,7 +75,10 @@ class BrowserPool {
       timezoneId: 'America/Sao_Paulo',
     });
 
-    logger.info({ maxPages: this.maxPages }, 'Pool de browser inicializado (single-context, multi-page).');
+    logger.info(
+      { maxPages: this.maxPages },
+      'Pool de browser inicializado (single-context, multi-page).',
+    );
   }
 
   /**
@@ -73,6 +89,7 @@ class BrowserPool {
    * - Cria nova aba no contexto compartilhado
    */
   async acquirePage(): Promise<Page> {
+    this.clearIdleShutdownTimer();
     await this.initialize();
     await this.requestQueue.enqueue();
 
@@ -101,9 +118,10 @@ class BrowserPool {
     } catch {
       // ignorado — página pode já estar fechada
     }
-    this.activePagesCount--;
+    this.activePagesCount = Math.max(0, this.activePagesCount - 1);
     logger.debug({ activePages: this.activePagesCount }, 'Página liberada do pool.');
     this.requestQueue.dequeue();
+    this.scheduleIdleShutdownIfNeeded();
   }
 
   /**
@@ -143,6 +161,7 @@ class BrowserPool {
     try {
       await this.authPromise;
       this.authenticated = true;
+      this.authPromise = null;
     } catch (err) {
       this.authPromise = null;
       throw err;
@@ -182,10 +201,15 @@ class BrowserPool {
 
       await page.waitForTimeout(800);
 
-      logger.info({ url: page.url() }, 'Login no Astrea realizado com sucesso (sessão compartilhada).');
+      logger.info(
+        { url: page.url() },
+        'Login no Astrea realizado com sucesso (sessão compartilhada).',
+      );
     } catch (originalErr) {
       try {
-        const errorEl = await page.$('.alert-danger, .alert-error, [class*="alerta"], div.toast-error');
+        const errorEl = await page.$(
+          '.alert-danger, .alert-error, [class*="alerta"], div.toast-error',
+        );
         if (errorEl) {
           const errorText = (await errorEl.textContent())?.trim();
           throw new Error(`AUTH_FAILED: ${errorText || 'Credenciais inválidas'}`);
@@ -204,6 +228,7 @@ class BrowserPool {
   }
 
   async shutdown(): Promise<void> {
+    this.clearIdleShutdownTimer();
     logger.info('Encerrando pool de browser...');
 
     if (this.context) {
@@ -218,8 +243,44 @@ class BrowserPool {
 
     this.authenticated = false;
     this.authPromise = null;
+    this.initPromise = null;
     this.activePagesCount = 0;
     logger.info('Pool de browser encerrado.');
+  }
+
+  private clearIdleShutdownTimer(): void {
+    if (this.idleShutdownTimer) {
+      clearTimeout(this.idleShutdownTimer);
+      this.idleShutdownTimer = null;
+    }
+  }
+
+  private scheduleIdleShutdownIfNeeded(): void {
+    if (this.idleTtlMs === 0) return;
+    if (!this.browser || !this.context) return;
+
+    const queueStats = this.requestQueue.stats;
+    if (this.activePagesCount > 0 || queueStats.active > 0 || queueStats.queued > 0) {
+      return;
+    }
+
+    this.clearIdleShutdownTimer();
+    this.idleShutdownTimer = setTimeout(() => {
+      this.idleShutdownTimer = null;
+
+      const latestQueueStats = this.requestQueue.stats;
+      if (this.activePagesCount > 0 || latestQueueStats.active > 0 || latestQueueStats.queued > 0) {
+        return;
+      }
+
+      logger.info(
+        { idleTtlMs: this.idleTtlMs },
+        'Pool ocioso por TTL configurado. Encerrando browser e mantendo lazy init para a próxima chamada.',
+      );
+      void this.shutdown().catch((err) => {
+        logger.warn({ err }, 'Falha ao encerrar pool ocioso.');
+      });
+    }, this.idleTtlMs);
   }
 
   get stats() {
@@ -228,6 +289,8 @@ class BrowserPool {
         total: this.maxPages,
         inUse: this.activePagesCount,
         available: this.maxPages - this.activePagesCount,
+        idleTtlMs: this.idleTtlMs,
+        initialized: !!this.browser && !!this.context,
       },
       queue: this.requestQueue.stats,
     };
