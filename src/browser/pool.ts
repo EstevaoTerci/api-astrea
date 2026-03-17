@@ -109,6 +109,13 @@ class BrowserPool {
     }
   }
 
+  async ensureAuthenticated(): Promise<void> {
+    await this.initialize();
+    if (!this.authenticated) {
+      await this._ensureAuthenticated();
+    }
+  }
+
   /**
    * Libera uma página (fecha a aba) e devolve o slot para a fila.
    */

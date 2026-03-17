@@ -21,6 +21,7 @@ import {
   transformarAtendimentoEmProcesso,
 } from '../services/atendimentos.service.js';
 import { listarUsuarios } from '../services/usuarios.service.js';
+import { adicionarDocumentoLink } from '../services/documentos.service.js';
 
 export function createMcpServer(): McpServer {
   const server = new McpServer({
@@ -363,6 +364,31 @@ export function createMcpServer(): McpServer {
     async (input) => {
       const { atendimentoId, ...payload } = input;
       const result = await transformarAtendimentoEmProcesso(atendimentoId, payload);
+      if (!result.ok) {
+        return {
+          content: [{ type: 'text', text: `Erro: ${result.error.message}` }],
+          isError: true,
+        };
+      }
+      const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
+      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
+    },
+  );
+
+  server.tool(
+    'adicionar_documento_link',
+    'Adiciona um documento tipo Link (URL) ao cadastro de um cliente. Usado para registrar a pasta Drive do cliente, por exemplo.',
+    {
+      clienteId: z.string().describe('ID do cliente no Astrea'),
+      link: z.string().url().describe('URL do link a registrar'),
+      descricao: z.string().describe('Descrição do documento (ex: "Pasta Drive")'),
+    },
+    async (input) => {
+      const result = await adicionarDocumentoLink({
+        link: input.link,
+        descricao: input.descricao,
+        clienteId: input.clienteId,
+      });
       if (!result.ok) {
         return {
           content: [{ type: 'text', text: `Erro: ${result.error.message}` }],

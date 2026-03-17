@@ -98,11 +98,13 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       };
       res
         .status(
-          result.error.code === 'VALIDATION_ERROR'
-            ? 400
-            : result.error.code === 'BROWSER_UNAVAILABLE'
-              ? 503
-              : 500,
+          result.error.code === 'NOT_FOUND'
+            ? 404
+            : result.error.code === 'VALIDATION_ERROR'
+              ? 400
+              : result.error.code === 'BROWSER_UNAVAILABLE'
+                ? 503
+                : 500,
         )
         .json(error);
       return;

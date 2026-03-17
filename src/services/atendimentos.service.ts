@@ -1,6 +1,7 @@
 import { Page } from 'playwright';
 import {
   ANGULAR_PAGE_PATH,
+  astreaApiGet,
   astreaApiPost,
   gapiCall,
   getAstreaUserId,
@@ -24,31 +25,58 @@ import type { FiltrosAtendimento, PaginationMeta, ServiceResponse } from '../typ
 // Tipos internos REST / GAPI
 // ─────────────────────────────────────────────────────────────────────────────
 
-interface ApiAtendimento {
+interface ApiConsultingCustomer {
   id?: string | number;
-  subject?: string;
-  status?: string;
-  clientId?: string | number;
-  clientName?: string;
-  folderId?: string | number;
-  folderTitle?: string;
-  responsibleId?: string | number;
-  responsibleName?: string;
-  dateTime?: string;
-  date?: string;
-  description?: string;
-  duration?: number;
-  createdAt?: string;
+  name?: string;
+  telephone?: string;
+  photo?: string;
+  main?: boolean;
 }
 
-interface ApiAtendimentoListResponse {
-  content?: ApiAtendimento[];
-  items?: ApiAtendimento[];
-  data?: ApiAtendimento[];
-  totalElements?: number;
-  total?: number;
-  size?: number;
-  page?: number;
+interface ApiConsultingMessage {
+  consultingMessageId?: string | number;
+  consultingId?: string | number;
+  createdDate?: string | number;
+  message?: string;
+  authorName?: string;
+  shortName?: string;
+  type?: string;
+  important?: boolean;
+}
+
+interface ApiConsultingCaseAttached {
+  id?: string | number;
+  title?: string;
+  type?: string;
+}
+
+interface ApiConsulting {
+  id?: string | number;
+  active?: boolean;
+  customers?: ApiConsultingCustomer[];
+  createdDate?: string | number;
+  ownerId?: string | number;
+  responsibleId?: string | number;
+  responsibleName?: string;
+  caseAttached?: ApiConsultingCaseAttached | null;
+  tagIds?: Array<string | number>;
+  messages?: ApiConsultingMessage[];
+  subject?: string;
+}
+
+interface ApiConsultingQueryResponse {
+  cursor?: string;
+  consultingDTO?: ApiConsulting[];
+}
+
+interface ApiConsultingCountResponse {
+  count?: number;
+  hasAnyConsulting?: boolean;
+}
+
+interface ApiContactSummary {
+  id?: string | number;
+  name?: string;
 }
 
 interface AstreaFolderSaveResponse {
@@ -75,21 +103,162 @@ const DEFAULT_LAWSUIT_CUSTOMER_ROLE = 'Autor';
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-function mapApiAtendimentoToAtendimento(a: ApiAtendimento): Atendimento {
+function toIsoDate(value?: string | number | null): string | undefined {
+  if (value == null || value === '') return undefined;
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return new Date(value).toISOString();
+  }
+
+  if (typeof value === 'string') {
+    const asNumber = Number(value);
+    if (Number.isFinite(asNumber) && value.trim() !== '') {
+      return new Date(asNumber).toISOString();
+    }
+
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toISOString();
+    }
+  }
+
+  return undefined;
+}
+
+function coerceAstreaId(value?: string | number | null): string | number | null {
+  if (value == null || value === '') return null;
+  if (typeof value === 'number') return value;
+
+  const numeric = Number(value);
+  return Number.isSafeInteger(numeric) ? numeric : value;
+}
+
+function mapStatusToConsultingQuery(status?: string): 'Active' | 'Inactive' {
+  if (!status) return 'Active';
+
+  const normalized = status.trim().toLowerCase();
+  if (normalized === 'inactive' || normalized === 'inativo' || normalized === 'encerrado') {
+    return 'Inactive';
+  }
+
+  return 'Active';
+}
+
+function mapApiAtendimentoToAtendimento(a: ApiConsulting): Atendimento {
+  const mainCustomer = a.customers?.find((customer) => customer.main) ?? a.customers?.[0];
+  const lastMessage = a.messages?.[0];
+
   return {
     id: String(a.id ?? ''),
     assunto: a.subject ?? '',
-    status: a.status ?? '',
-    clienteId: a.clientId != null ? String(a.clientId) : undefined,
-    clienteNome: a.clientName ?? undefined,
-    casoId: a.folderId != null ? String(a.folderId) : undefined,
-    casoTitulo: a.folderTitle ?? undefined,
+    status: a.active === false ? 'ENCERRADO' : 'EM ANDAMENTO',
+    clienteId: mainCustomer?.id != null ? String(mainCustomer.id) : undefined,
+    clienteNome: mainCustomer?.name ?? undefined,
+    casoId: a.caseAttached?.id != null ? String(a.caseAttached.id) : undefined,
+    casoTitulo: a.caseAttached?.title ?? undefined,
     responsavelId: a.responsibleId != null ? String(a.responsibleId) : undefined,
-    responsavelNome: a.responsibleName ?? undefined,
-    dataHora: a.dateTime ?? a.date ?? undefined,
-    descricao: a.description ?? undefined,
-    duracaoMinutos: a.duration ?? undefined,
-    createdAt: a.createdAt ?? undefined,
+    responsavelNome: a.responsibleName ?? lastMessage?.authorName ?? undefined,
+    dataHora: toIsoDate(a.createdDate ?? lastMessage?.createdDate),
+    descricao: lastMessage?.message ?? undefined,
+    createdAt: toIsoDate(a.createdDate),
+  };
+}
+
+function buildConsultingQueryPayload(
+  filtros: FiltrosAtendimento | undefined,
+  limit: number,
+  cursor = '',
+): Record<string, unknown> {
+  return {
+    status: mapStatusToConsultingQuery(filtros?.status),
+    tagIds: [],
+    subject: '',
+    consultingId: null,
+    customerId: coerceAstreaId(filtros?.clienteId ?? null),
+    order: '-createDate',
+    caseAttached: null,
+    limit,
+    createdAt: null,
+    dateBegin: filtros?.dataInicio ?? null,
+    dateEnd: filtros?.dataFim ?? null,
+    cursor,
+  };
+}
+
+function filterConsultings(items: ApiConsulting[], filtros?: FiltrosAtendimento): ApiConsulting[] {
+  if (!filtros?.casoId) return items;
+  return items.filter((item) => String(item.caseAttached?.id ?? '') === filtros.casoId);
+}
+
+async function fetchConsultingPage(
+  page: Page,
+  filtros: FiltrosAtendimento | undefined,
+  targetPage: number,
+  limit: number,
+): Promise<{ items: ApiConsulting[]; cursor?: string }> {
+  let cursor = '';
+  let items: ApiConsulting[] = [];
+
+  for (let currentPage = 1; currentPage <= targetPage; currentPage++) {
+    const response = await astreaApiPost<ApiConsultingQueryResponse>(
+      page,
+      '/consulting/query',
+      buildConsultingQueryPayload(filtros, limit, cursor),
+    );
+
+    items = response.consultingDTO ?? [];
+    cursor = response.cursor ?? '';
+
+    if (currentPage < targetPage && !cursor) {
+      return { items: [], cursor: '' };
+    }
+  }
+
+  return { items: filterConsultings(items, filtros), cursor };
+}
+
+async function fetchConsultingCount(
+  page: Page,
+  filtros: FiltrosAtendimento | undefined,
+  limit: number,
+): Promise<number | undefined> {
+  if (filtros?.casoId) return undefined;
+
+  const response = await astreaApiPost<ApiConsultingCountResponse>(
+    page,
+    '/consulting/query/count',
+    buildConsultingQueryPayload(filtros, limit),
+  );
+
+  return response.count;
+}
+
+async function loadContactSummary(page: Page, contactId: string): Promise<ApiContactSummary> {
+  try {
+    return await astreaApiGet<ApiContactSummary>(page, `/contact/${contactId}/details`);
+  } catch (err) {
+    if (err instanceof Error && err.message.includes('API_ERROR_404')) {
+      throw new Error('NOT_FOUND: Contato não encontrado');
+    }
+    throw err;
+  }
+}
+
+async function resolveCaseAttachment(
+  casoId?: string,
+): Promise<{ id: string | number; title: string } | null> {
+  if (!casoId) return null;
+
+  const caso = await buscarCaso(casoId);
+  if (!caso.ok) {
+    throw new Error(
+      `${caso.error.code === 'NOT_FOUND' ? 'NOT_FOUND' : 'API_ERROR'}: ${caso.error.message}`,
+    );
+  }
+
+  return {
+    id: coerceAstreaId(casoId) ?? casoId,
+    title: caso.data.titulo,
   };
 }
 
@@ -360,41 +529,20 @@ export async function listarAtendimentos(
     const result = await withBrowserContext(async (page) => {
       await navigateTo(page, ANGULAR_PAGE_PATH);
 
-      const payload = {
-        page: filtros?.pagina ?? 1,
-        size: filtros?.limite ?? 50,
-        ...(filtros?.clienteId != null ? { clientId: filtros.clienteId } : {}),
-        ...(filtros?.casoId != null ? { folderId: filtros.casoId } : {}),
-        ...(filtros?.status != null ? { status: filtros.status } : {}),
-        ...(filtros?.dataInicio != null ? { startDate: filtros.dataInicio } : {}),
-        ...(filtros?.dataFim != null ? { endDate: filtros.dataFim } : {}),
-      };
-
-      const res = await astreaApiPost<any>(page, '/consulting/all', payload);
-
-      let rawItems: ApiAtendimento[] = [];
-      if (Array.isArray(res)) {
-        rawItems = res as ApiAtendimento[];
-      } else if (Array.isArray(res?.content)) {
-        rawItems = res.content as ApiAtendimento[];
-      } else if (Array.isArray(res?.items)) {
-        rawItems = res.items as ApiAtendimento[];
-      } else if (Array.isArray(res?.data)) {
-        rawItems = res.data as ApiAtendimento[];
-      } else {
-        logger.warn({ res }, 'Resposta inesperada de /consulting/all — retornando vazio');
-      }
-
-      const total: number | undefined =
-        (res as ApiAtendimentoListResponse)?.totalElements ??
-        (res as ApiAtendimentoListResponse)?.total ??
-        rawItems.length;
-
       const pagina = filtros?.pagina ?? 1;
       const limite = filtros?.limite ?? 50;
-      const meta: PaginationMeta = { pagina, limite, total };
+      const [{ items, cursor }, total] = await Promise.all([
+        fetchConsultingPage(page, filtros, pagina, limite),
+        fetchConsultingCount(page, filtros, limite),
+      ]);
+      const meta: PaginationMeta = {
+        pagina,
+        limite,
+        total: total ?? items.length,
+        hasNextPage: Boolean(cursor),
+      };
 
-      return { items: rawItems.map(mapApiAtendimentoToAtendimento), meta };
+      return { items: items.map(mapApiAtendimentoToAtendimento), meta };
     });
 
     return { ok: true, data: result.items, meta: result.meta };
@@ -419,33 +567,55 @@ export async function criarAtendimento(
   input: CriarAtendimentoInput,
 ): Promise<ServiceResponse<Atendimento>> {
   try {
+    const attachedCase = await resolveCaseAttachment(input.casoId);
     const atendimento = await withBrowserContext(async (page) => {
       await navigateTo(page, ANGULAR_PAGE_PATH);
 
+      const currentUserId = input.responsavelId || (await getAstreaUserId(page));
+      const contact = await loadContactSummary(page, input.clienteId);
+      if (!contact?.name) {
+        throw new Error('NOT_FOUND: Contato não encontrado');
+      }
+
+      const firstMessage = input.descricao?.trim() || input.assunto.trim();
       const payload = {
-        subject: input.assunto,
-        clientId: input.clienteId,
-        ...(input.casoId != null ? { folderId: input.casoId } : {}),
-        responsibleId: input.responsavelId,
-        date: input.data,
-        time: input.hora,
-        ...(input.descricao != null ? { description: input.descricao } : {}),
-        ...(input.duracaoMinutos != null ? { duration: input.duracaoMinutos } : {}),
+        subject: input.assunto.trim(),
+        message: firstMessage,
+        tagIds: [],
+        responsibleId: currentUserId,
+        ownerId: currentUserId,
+        active: true,
+        customers: [
+          {
+            id: coerceAstreaId(input.clienteId) ?? input.clienteId,
+            name: contact.name,
+            main: true,
+          },
+        ],
+        caseAttached: attachedCase,
+        messages: [
+          {
+            message: firstMessage,
+            userAuthor: currentUserId,
+          },
+        ],
       };
 
-      const res = await astreaApiPost<any>(page, '/consulting', payload);
-      return mapApiAtendimentoToAtendimento(res as ApiAtendimento);
+      const res = await astreaApiPost<ApiConsulting>(page, '/consulting', payload);
+      return mapApiAtendimentoToAtendimento(res);
     });
 
     return { ok: true, data: atendimento };
   } catch (err) {
     logger.error({ err }, 'Erro em criarAtendimento');
+    const isNotFound = err instanceof Error && err.message.includes('NOT_FOUND');
     return {
       ok: false,
       error: {
-        message: err instanceof Error ? err.message : 'Erro desconhecido',
-        code: 'API_ERROR',
-        retryable: isRetryablePlaywrightError(err),
+        message:
+          err instanceof Error ? err.message.replace(/^NOT_FOUND:\s*/, '') : 'Erro desconhecido',
+        code: isNotFound ? 'NOT_FOUND' : 'API_ERROR',
+        retryable: !isNotFound && isRetryablePlaywrightError(err),
       },
     };
   }

@@ -45,6 +45,17 @@ export function isScrapingError(err: unknown): boolean {
   );
 }
 
+function isSessionRecoveryError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const msg = err.message;
+  return (
+    msg.includes('SESSION_EXPIRED') ||
+    msg.includes('non-existent user session') ||
+    msg.includes('INVALID_SESSION_EXCEPTION') ||
+    msg.includes('API_ERROR_401')
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // withBrowserContext — wrapper compartilhado com retry + invalidação de sessão
 // ─────────────────────────────────────────────────────────────────────────────
@@ -56,26 +67,24 @@ export function isScrapingError(err: unknown): boolean {
  * Todas as páginas compartilham cookies/sessão (single-context), permitindo
  * paralelismo real sem conflito de sessão no Astrea.
  */
-export async function withBrowserContext<T>(
-  operation: (page: Page) => Promise<T>,
-): Promise<T> {
+export async function withBrowserContext<T>(operation: (page: Page) => Promise<T>): Promise<T> {
   const page = await browserPool.acquirePage();
   try {
     return await withRetry(
-      () => operation(page),
+      async () => {
+        await browserPool.ensureAuthenticated();
+        return operation(page);
+      },
       {
         maxAttempts: 3,
         retryIf: (err) => {
           if (err instanceof Error && err.message.includes('AUTH_FAILED')) return false;
+          if (isSessionRecoveryError(err)) return true;
           return isRetryablePlaywrightError(err as Error);
         },
         onRetry: (err, attempt) => {
           logger.warn({ err: String(err), attempt }, 'Retentando operação no browser...');
-          if (
-            err instanceof Error &&
-            (err.message.includes('SESSION_EXPIRED') ||
-              err.message.includes('non-existent user session'))
-          ) {
+          if (isSessionRecoveryError(err)) {
             browserPool.invalidateSession();
           }
         },
@@ -95,8 +104,17 @@ export async function astreaApiGet<T>(page: Page, path: string): Promise<T> {
   return page.evaluate(async (url: string) => {
     const http = (window as any).angular?.element(document.body)?.injector()?.get('$http');
     if (!http) throw new Error('Angular $http não disponível');
-    const res = await http.get(url);
-    return res.data as T;
+
+    try {
+      const res = await http.get(url);
+      return res.data as T;
+    } catch (err: any) {
+      const status = err?.status ?? 'UNKNOWN';
+      const rawMessage =
+        err?.data?.errorMessage ?? err?.data ?? err?.message ?? err?.statusText ?? err;
+      const detail = typeof rawMessage === 'string' ? rawMessage : JSON.stringify(rawMessage);
+      throw new Error(`API_ERROR_${status}: ${detail}`);
+    }
   }, `${ASTREA_API}${path}`);
 }
 
@@ -106,8 +124,17 @@ export async function astreaApiPost<T>(page: Page, path: string, body: unknown):
     async ({ url, body }: { url: string; body: unknown }) => {
       const http = (window as any).angular?.element(document.body)?.injector()?.get('$http');
       if (!http) throw new Error('Angular $http não disponível');
-      const res = await http.post(url, body);
-      return res.data as T;
+
+      try {
+        const res = await http.post(url, body);
+        return res.data as T;
+      } catch (err: any) {
+        const status = err?.status ?? 'UNKNOWN';
+        const rawMessage =
+          err?.data?.errorMessage ?? err?.data ?? err?.message ?? err?.statusText ?? err;
+        const detail = typeof rawMessage === 'string' ? rawMessage : JSON.stringify(rawMessage);
+        throw new Error(`API_ERROR_${status}: ${detail}`);
+      }
     },
     { url: `${ASTREA_API}${path}`, body },
   );
@@ -118,8 +145,17 @@ export async function astreaApiDelete<T>(page: Page, path: string): Promise<T> {
   return page.evaluate(async (url: string) => {
     const http = (window as any).angular?.element(document.body)?.injector()?.get('$http');
     if (!http) throw new Error('Angular $http não disponível');
-    const res = await http.delete(url);
-    return res.data as T;
+
+    try {
+      const res = await http.delete(url);
+      return res.data as T;
+    } catch (err: any) {
+      const status = err?.status ?? 'UNKNOWN';
+      const rawMessage =
+        err?.data?.errorMessage ?? err?.data ?? err?.message ?? err?.statusText ?? err;
+      const detail = typeof rawMessage === 'string' ? rawMessage : JSON.stringify(rawMessage);
+      throw new Error(`API_ERROR_${status}: ${detail}`);
+    }
   }, `${ASTREA_API}${path}`);
 }
 
@@ -147,17 +183,17 @@ export async function gapiCall<T>(
 ): Promise<T> {
   return page.evaluate(
     async ({ service, method, params, body, timeoutMs }) => {
-      const serviceRef = service.split('.').reduce(
-        (obj: any, key: string) => obj?.[key],
-        (window as any).gapi?.client,
-      );
+      const serviceRef = service
+        .split('.')
+        .reduce((obj: any, key: string) => obj?.[key], (window as any).gapi?.client);
       if (!serviceRef) throw new Error(`gapi.client.${service} não disponível`);
       if (typeof serviceRef[method] !== 'function') {
         throw new Error(`Método ${method} não encontrado em gapi.client.${service}`);
       }
 
       return new Promise<T>((resolve, reject) => {
-        const req = body !== undefined ? serviceRef[method](params, body) : serviceRef[method](params);
+        const req =
+          body !== undefined ? serviceRef[method](params, body) : serviceRef[method](params);
         req.execute((r: any) => {
           if (r.error) {
             const errMsg = typeof r.error === 'object' ? JSON.stringify(r.error) : String(r.error);
@@ -166,7 +202,10 @@ export async function gapiCall<T>(
             resolve(r as T);
           }
         });
-        setTimeout(() => reject(new Error(`Timeout ${timeoutMs}ms em gapi.client.${service}.${method}`)), timeoutMs);
+        setTimeout(
+          () => reject(new Error(`Timeout ${timeoutMs}ms em gapi.client.${service}.${method}`)),
+          timeoutMs,
+        );
       });
     },
     { service, method, params, body, timeoutMs },
@@ -211,7 +250,10 @@ export async function withScrapingFallback<T>(
   } catch (err) {
     if (!isScrapingError(err)) throw err;
 
-    logger.warn({ taskDescription, err: String(err) }, 'Scraping falhou — ativando fallback LLM...');
+    logger.warn(
+      { taskDescription, err: String(err) },
+      'Scraping falhou — ativando fallback LLM...',
+    );
 
     const { llmNavigate } = await import('../utils/llm-navigator.js');
     const { notifyScrapingIncident } = await import('../utils/mailer.js');

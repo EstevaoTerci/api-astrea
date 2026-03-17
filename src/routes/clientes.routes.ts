@@ -7,6 +7,7 @@ import {
   listarTodosClientes,
 } from '../services/clientes.service.js';
 import { buscarCasosPorCliente } from '../services/casos.service.js';
+import { adicionarDocumentoLink } from '../services/documentos.service.js';
 import type { ApiResponse, ApiError } from '../types/index.js';
 
 const router = Router();
@@ -186,6 +187,50 @@ router.get('/:id/casos', async (req: Request, res: Response, next: NextFunction)
       meta: result.meta ?? { pagina, limite },
     };
     res.json(response);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Documentos
+// ─────────────────────────────────────────────────────────────────────────────
+
+const adicionarDocumentoSchema = z.object({
+  link: z.string().url(),
+  descricao: z.string().min(1),
+});
+
+/** POST /api/clientes/:id/documentos — Adiciona um documento tipo Link ao cliente */
+router.post('/:id/documentos', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { id } = req.params;
+    const body = adicionarDocumentoSchema.parse(req.body);
+
+    const result = await adicionarDocumentoLink({
+      link: body.link,
+      descricao: body.descricao,
+      clienteId: id,
+    });
+
+    if (!result.ok) {
+      const error: ApiError = {
+        success: false,
+        error: result.error.message,
+        code: result.error.code,
+      };
+      const status =
+        result.error.code === 'BROWSER_UNAVAILABLE'
+          ? 503
+          : result.error.code === 'VALIDATION_ERROR'
+            ? 400
+            : 500;
+      res.status(status).json(error);
+      return;
+    }
+
+    const response: ApiResponse<typeof result.data> = { success: true, data: result.data };
+    res.status(201).json(response);
   } catch (err) {
     next(err);
   }
