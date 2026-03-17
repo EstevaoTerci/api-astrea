@@ -2,6 +2,7 @@ export type {
   DocumentoContato,
   Cliente,
   ClienteResumido,
+  CriarClienteInput,
   Caso,
   ProcessoResumido,
   Processo,
@@ -13,6 +14,8 @@ export type {
   Usuario,
   Atendimento,
   CriarAtendimentoInput,
+  TransformarAtendimentoEmCasoInput,
+  TransformarAtendimentoEmProcessoInput,
 } from '../models/index.js';
 
 export interface FiltrosAtendimento {

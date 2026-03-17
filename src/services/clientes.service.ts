@@ -3,7 +3,12 @@ import { withBrowserContext } from '../browser/astrea-http.js';
 import { navigateTo } from '../browser/navigator.js';
 import { isRetryablePlaywrightError } from '../utils/retry.js';
 import { logger } from '../utils/logger.js';
-import type { Cliente, ClienteResumido, DocumentoContato } from '../models/index.js';
+import type {
+  Cliente,
+  ClienteResumido,
+  CriarClienteInput,
+  DocumentoContato,
+} from '../models/index.js';
 import type { FiltrosCliente, ServiceResponse, PaginationMeta } from '../types/index.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -18,6 +23,7 @@ const ASTREA_API = 'https://app.astrea.net.br/api/v2';
  * Após login, navegamos aqui para garantir que o $http do Angular está disponível.
  */
 const ANGULAR_PAGE_PATH = '/#/main/contacts';
+const CONTACT_ADD_PERSONAL_PATH = '/#/main/contacts/add-edit-merge/%5B,,,%5B%5D,%5D/personal';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Tipos da API interna do Astrea (Mapeados via playwright-mcp em 21/02/2026)
@@ -89,6 +95,35 @@ interface AstreaContactListResponse {
   contacts: AstreaContactListItem[];
 }
 
+interface AstreaSaveContactResponse {
+  response?: string | number;
+  errorMessage?: string;
+}
+
+interface AstreaContactDraft {
+  contactKind?: string;
+  classification?: number;
+  name?: string;
+  nickname?: string;
+  taxDocumentNumber?: string;
+  clientOrigin?: string;
+  telephones?: Array<{ type?: string; operator?: string; number?: string }>;
+  emails?: Array<{ type?: string; address?: string }>;
+  addresses?: Array<{
+    type?: string;
+    zipCode?: string;
+    street?: string;
+    number?: string;
+    complement?: string;
+    district?: string;
+    city?: string;
+    state?: string;
+    countryName?: string;
+  }>;
+  webSites?: Array<{ url?: string }>;
+  [key: string]: unknown;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers: chamadas autenticadas à API via AngularJS $http
 //
@@ -129,6 +164,115 @@ async function astreaApiPost<T>(page: Page, url: string, body: unknown): Promise
       }),
     [url, body] as [string, unknown],
   );
+}
+
+async function loadDefaultContactDraft(page: Page): Promise<AstreaContactDraft> {
+  await navigateTo(page, CONTACT_ADD_PERSONAL_PATH);
+  await page.waitForSelector('button[ng-click="save(myForm.$invalid)"]', { timeout: 15_000 });
+
+  return page.evaluate(() => {
+    const saveBtn = Array.from(document.querySelectorAll('button')).find(
+      (button) => (button.textContent ?? '').trim() === 'Salvar',
+    );
+
+    if (!saveBtn) {
+      throw new Error('FORM_UNAVAILABLE: botão de salvar do contato não encontrado');
+    }
+
+    const ng = (window as any).angular;
+    const scope = ng?.element(saveBtn)?.scope?.();
+    const controllerScope = scope?.$parent ?? scope;
+    if (!controllerScope?.contact) {
+      throw new Error('FORM_UNAVAILABLE: payload base do contato não encontrado');
+    }
+
+    return JSON.parse(JSON.stringify(controllerScope.contact));
+  });
+}
+
+function buildContactPayload(
+  baseDraft: AstreaContactDraft,
+  input: CriarClienteInput,
+): AstreaContactDraft {
+  const payload: AstreaContactDraft = {
+    ...baseDraft,
+    name: input.nome.trim(),
+    classification: input.perfil === 'contato' ? 2 : 1,
+    contactKind: input.tipo === 'pessoa_juridica' ? 'COMPANY' : 'PERSON',
+    nickname: input.apelido?.trim() || '',
+    taxDocumentNumber: input.cpfCnpj?.trim() || '',
+    clientOrigin: input.origem?.trim() || '',
+    telephones: Array.isArray(baseDraft.telephones)
+      ? baseDraft.telephones.map((phone) => ({ ...phone }))
+      : [{ type: '', operator: '', number: '' }],
+    emails: Array.isArray(baseDraft.emails)
+      ? baseDraft.emails.map((email) => ({ ...email }))
+      : [{ type: '', address: '' }],
+    addresses: Array.isArray(baseDraft.addresses)
+      ? baseDraft.addresses.map((address) => ({ ...address }))
+      : [
+          {
+            type: '',
+            zipCode: '',
+            street: '',
+            number: '',
+            complement: '',
+            district: '',
+            city: '',
+            state: '',
+            countryName: '',
+          },
+        ],
+    webSites: Array.isArray(baseDraft.webSites)
+      ? baseDraft.webSites.map((site) => ({ ...site }))
+      : [{ url: '' }],
+  } satisfies AstreaContactDraft;
+
+  if (payload.classification !== 1) {
+    payload.clientOrigin = undefined;
+  }
+
+  if (input.telefone?.trim()) {
+    payload.telephones![0] = {
+      ...payload.telephones![0],
+      number: input.telefone.trim(),
+    };
+  }
+
+  if (input.email?.trim()) {
+    payload.emails![0] = {
+      ...payload.emails![0],
+      address: input.email.trim(),
+    };
+  }
+
+  if (input.site?.trim()) {
+    payload.webSites![0] = {
+      ...payload.webSites![0],
+      url: input.site.trim(),
+    };
+  }
+
+  if (typeof input.endereco === 'string' && input.endereco.trim()) {
+    payload.addresses![0] = {
+      ...payload.addresses![0],
+      street: input.endereco.trim(),
+    };
+  } else if (input.endereco && typeof input.endereco === 'object') {
+    payload.addresses![0] = {
+      ...payload.addresses![0],
+      zipCode: input.endereco.cep?.trim() ?? '',
+      street: input.endereco.logradouro?.trim() ?? '',
+      number: input.endereco.numero?.trim() ?? '',
+      complement: input.endereco.complemento?.trim() ?? '',
+      district: input.endereco.bairro?.trim() ?? '',
+      city: input.endereco.cidade?.trim() ?? '',
+      state: input.endereco.estado?.trim() ?? '',
+      countryName: input.endereco.pais?.trim() ?? '',
+    };
+  }
+
+  return payload;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -421,6 +565,43 @@ export async function listarTodosClientes(): Promise<ServiceResponse<ClienteResu
           err instanceof Error && err.message.includes('BROWSER_POOL_TIMEOUT')
             ? 'BROWSER_UNAVAILABLE'
             : 'SCRAPE_ERROR',
+        retryable: isRetryablePlaywrightError(err),
+      },
+    };
+  }
+}
+
+export async function criarCliente(input: CriarClienteInput): Promise<ServiceResponse<Cliente>> {
+  try {
+    const contactId = await withBrowserContext(async (page) => {
+      const baseDraft = await loadDefaultContactDraft(page);
+      const payload = buildContactPayload(baseDraft, input);
+
+      const response = await astreaApiPost<AstreaSaveContactResponse>(
+        page,
+        `${ASTREA_API}/contact/save`,
+        payload,
+      );
+
+      const createdContactId = response.response;
+      if (createdContactId == null || createdContactId === 'NOT_OK') {
+        throw new Error(
+          `API_ERROR: ${response.errorMessage || 'Astrea não retornou o ID do contato criado'}`,
+        );
+      }
+
+      return String(createdContactId);
+    });
+
+    return await buscarCliente(contactId);
+  } catch (err) {
+    logger.error({ err, input }, 'Erro em criarCliente');
+    return {
+      ok: false,
+      error: {
+        message:
+          err instanceof Error ? err.message.replace(/^API_ERROR:\s*/, '') : 'Erro desconhecido',
+        code: 'API_ERROR',
         retryable: isRetryablePlaywrightError(err),
       },
     };

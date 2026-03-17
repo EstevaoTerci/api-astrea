@@ -32,3 +32,29 @@ export interface CriarAtendimentoInput {
   descricao?: string;
   duracaoMinutos?: number;
 }
+
+export type CompartilhamentoCaso = 'publico' | 'privado' | 'equipe';
+
+export interface TransformarAtendimentoEmCasoInput {
+  titulo?: string;
+  descricao?: string;
+  observacoes?: string;
+  responsavelId?: string;
+  sharingType?: CompartilhamentoCaso;
+  tagsIds?: string[];
+  teamId?: string;
+}
+
+export interface TransformarAtendimentoEmProcessoInput extends TransformarAtendimentoEmCasoInput {
+  numeroProcesso?: string;
+  instancia?: 1 | 2 | 3 | 4;
+  juizoNumero?: string;
+  vara?: string;
+  foro?: string;
+  acao?: string;
+  urlTribunal?: string;
+  objeto?: string;
+  valorCausa?: number;
+  distribuidoEm?: string;
+  valorCondenacao?: number;
+}

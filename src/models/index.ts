@@ -28,10 +28,23 @@ export type {
   ApensoProcesso,
 } from './caso-processo.js';
 
-export type { Cliente, ClienteResumido } from './cliente.js';
+export type {
+  Cliente,
+  ClienteResumido,
+  CriarClienteInput,
+  EnderecoCriacaoClienteInput,
+  PerfilContato,
+  TipoContato,
+} from './cliente.js';
 export type { Caso, ProcessoResumido, Processo } from './caso.js';
 export type { Andamento } from './andamento.js';
 export type { Tarefa, CriarTarefaInput, AtualizarTarefaInput } from './tarefa.js';
 export type { Publicacao } from './publicacao.js';
 export type { Usuario } from './usuario.js';
-export type { Atendimento, CriarAtendimentoInput } from './atendimento.js';
+export type {
+  Atendimento,
+  CompartilhamentoCaso,
+  CriarAtendimentoInput,
+  TransformarAtendimentoEmCasoInput,
+  TransformarAtendimentoEmProcessoInput,
+} from './atendimento.js';

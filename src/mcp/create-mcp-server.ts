@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
 import {
+  criarCliente,
   listarClientes,
   buscarCliente as buscarClientePorId,
   listarTodosClientes,
@@ -13,7 +14,12 @@ import {
   atualizarTarefa,
   buscarTarefasPorProcesso,
 } from '../services/tarefas.service.js';
-import { listarAtendimentos, criarAtendimento } from '../services/atendimentos.service.js';
+import {
+  criarAtendimento,
+  listarAtendimentos,
+  transformarAtendimentoEmCaso,
+  transformarAtendimentoEmProcesso,
+} from '../services/atendimentos.service.js';
 import { listarUsuarios } from '../services/usuarios.service.js';
 
 export function createMcpServer(): McpServer {
@@ -35,7 +41,10 @@ export function createMcpServer(): McpServer {
     async (input) => {
       const result = await listarClientes(input);
       if (!result.ok) {
-        return { content: [{ type: 'text', text: `Erro: ${result.error.message}` }], isError: true };
+        return {
+          content: [{ type: 'text', text: `Erro: ${result.error.message}` }],
+          isError: true,
+        };
       }
       const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
       return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
@@ -51,21 +60,74 @@ export function createMcpServer(): McpServer {
     async (input) => {
       const result = await buscarClientePorId(input.id);
       if (!result.ok) {
-        return { content: [{ type: 'text', text: `Erro: ${result.error.message}` }], isError: true };
+        return {
+          content: [{ type: 'text', text: `Erro: ${result.error.message}` }],
+          isError: true,
+        };
       }
       const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
       return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
     },
   );
 
-  server.tool('listar_todos_clientes', 'Lista todos os clientes (resumido, sem paginação).', {}, async () => {
-    const result = await listarTodosClientes();
-    if (!result.ok) {
-      return { content: [{ type: 'text', text: `Erro: ${result.error.message}` }], isError: true };
-    }
-    const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
-    return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
-  });
+  server.tool(
+    'listar_todos_clientes',
+    'Lista todos os clientes (resumido, sem paginação).',
+    {},
+    async () => {
+      const result = await listarTodosClientes();
+      if (!result.ok) {
+        return {
+          content: [{ type: 'text', text: `Erro: ${result.error.message}` }],
+          isError: true,
+        };
+      }
+      const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
+      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
+    },
+  );
+
+  server.tool(
+    'criar_cliente',
+    'Cria um cliente/contato no Astrea.',
+    {
+      nome: z.string(),
+      perfil: z.enum(['cliente', 'contato']).optional(),
+      tipo: z.enum(['pessoa_fisica', 'pessoa_juridica']).optional(),
+      apelido: z.string().optional(),
+      cpfCnpj: z.string().optional(),
+      origem: z.string().optional(),
+      site: z.string().optional(),
+      email: z.string().optional(),
+      telefone: z.string().optional(),
+      endereco: z
+        .union([
+          z.string(),
+          z.object({
+            cep: z.string().optional(),
+            logradouro: z.string().optional(),
+            numero: z.string().optional(),
+            complemento: z.string().optional(),
+            bairro: z.string().optional(),
+            cidade: z.string().optional(),
+            estado: z.string().optional(),
+            pais: z.string().optional(),
+          }),
+        ])
+        .optional(),
+    },
+    async (input) => {
+      const result = await criarCliente(input);
+      if (!result.ok) {
+        return {
+          content: [{ type: 'text', text: `Erro: ${result.error.message}` }],
+          isError: true,
+        };
+      }
+      const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
+      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
+    },
+  );
 
   server.tool(
     'buscar_caso',
@@ -76,7 +138,10 @@ export function createMcpServer(): McpServer {
     async (input) => {
       const result = await buscarCasoPorId(input.id);
       if (!result.ok) {
-        return { content: [{ type: 'text', text: `Erro: ${result.error.message}` }], isError: true };
+        return {
+          content: [{ type: 'text', text: `Erro: ${result.error.message}` }],
+          isError: true,
+        };
       }
       const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
       return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
@@ -92,7 +157,10 @@ export function createMcpServer(): McpServer {
     async (input) => {
       const result = await buscarCasosPorCliente(input.clienteId);
       if (!result.ok) {
-        return { content: [{ type: 'text', text: `Erro: ${result.error.message}` }], isError: true };
+        return {
+          content: [{ type: 'text', text: `Erro: ${result.error.message}` }],
+          isError: true,
+        };
       }
       const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
       return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
@@ -112,7 +180,10 @@ export function createMcpServer(): McpServer {
     async (input) => {
       const result = await listarTarefas(input);
       if (!result.ok) {
-        return { content: [{ type: 'text', text: `Erro: ${result.error.message}` }], isError: true };
+        return {
+          content: [{ type: 'text', text: `Erro: ${result.error.message}` }],
+          isError: true,
+        };
       }
       const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
       return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
@@ -133,7 +204,10 @@ export function createMcpServer(): McpServer {
     async (input) => {
       const result = await criarTarefa(input);
       if (!result.ok) {
-        return { content: [{ type: 'text', text: `Erro: ${result.error.message}` }], isError: true };
+        return {
+          content: [{ type: 'text', text: `Erro: ${result.error.message}` }],
+          isError: true,
+        };
       }
       const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
       return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
@@ -155,7 +229,10 @@ export function createMcpServer(): McpServer {
       const { id, ...updateInput } = input;
       const result = await atualizarTarefa(id, updateInput);
       if (!result.ok) {
-        return { content: [{ type: 'text', text: `Erro: ${result.error.message}` }], isError: true };
+        return {
+          content: [{ type: 'text', text: `Erro: ${result.error.message}` }],
+          isError: true,
+        };
       }
       const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
       return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
@@ -171,7 +248,10 @@ export function createMcpServer(): McpServer {
     async (input) => {
       const result = await buscarTarefasPorProcesso(input.processoId);
       if (!result.ok) {
-        return { content: [{ type: 'text', text: `Erro: ${result.error.message}` }], isError: true };
+        return {
+          content: [{ type: 'text', text: `Erro: ${result.error.message}` }],
+          isError: true,
+        };
       }
       const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
       return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
@@ -193,7 +273,10 @@ export function createMcpServer(): McpServer {
     async (input) => {
       const result = await listarAtendimentos(input);
       if (!result.ok) {
-        return { content: [{ type: 'text', text: `Erro: ${result.error.message}` }], isError: true };
+        return {
+          content: [{ type: 'text', text: `Erro: ${result.error.message}` }],
+          isError: true,
+        };
       }
       const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
       return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
@@ -216,7 +299,75 @@ export function createMcpServer(): McpServer {
     async (input) => {
       const result = await criarAtendimento(input);
       if (!result.ok) {
-        return { content: [{ type: 'text', text: `Erro: ${result.error.message}` }], isError: true };
+        return {
+          content: [{ type: 'text', text: `Erro: ${result.error.message}` }],
+          isError: true,
+        };
+      }
+      const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
+      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
+    },
+  );
+
+  server.tool(
+    'transformar_atendimento_em_caso',
+    'Transforma um atendimento em caso.',
+    {
+      atendimentoId: z.string(),
+      titulo: z.string().optional(),
+      descricao: z.string().optional(),
+      observacoes: z.string().optional(),
+      responsavelId: z.string().optional(),
+      sharingType: z.enum(['publico', 'privado', 'equipe']).optional(),
+      tagsIds: z.array(z.string()).optional(),
+      teamId: z.string().optional(),
+    },
+    async (input) => {
+      const { atendimentoId, ...payload } = input;
+      const result = await transformarAtendimentoEmCaso(atendimentoId, payload);
+      if (!result.ok) {
+        return {
+          content: [{ type: 'text', text: `Erro: ${result.error.message}` }],
+          isError: true,
+        };
+      }
+      const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
+      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
+    },
+  );
+
+  server.tool(
+    'transformar_atendimento_em_processo',
+    'Transforma um atendimento em processo.',
+    {
+      atendimentoId: z.string(),
+      titulo: z.string().optional(),
+      observacoes: z.string().optional(),
+      descricao: z.string().optional(),
+      responsavelId: z.string().optional(),
+      sharingType: z.enum(['publico', 'privado', 'equipe']).optional(),
+      tagsIds: z.array(z.string()).optional(),
+      teamId: z.string().optional(),
+      numeroProcesso: z.string().optional(),
+      instancia: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]).optional(),
+      juizoNumero: z.string().optional(),
+      vara: z.string().optional(),
+      foro: z.string().optional(),
+      acao: z.string().optional(),
+      urlTribunal: z.string().optional(),
+      objeto: z.string().optional(),
+      valorCausa: z.number().optional(),
+      distribuidoEm: z.string().optional(),
+      valorCondenacao: z.number().optional(),
+    },
+    async (input) => {
+      const { atendimentoId, ...payload } = input;
+      const result = await transformarAtendimentoEmProcesso(atendimentoId, payload);
+      if (!result.ok) {
+        return {
+          content: [{ type: 'text', text: `Erro: ${result.error.message}` }],
+          isError: true,
+        };
       }
       const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
       return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };

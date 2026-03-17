@@ -4,15 +4,19 @@ API REST que expõe dados do sistema jurídico [Astrea](https://astrea.net.br) v
 
 ## Endpoints
 
-| Método | Rota                        | Descrição                               |
-| ------ | --------------------------- | --------------------------------------- |
-| `GET`  | `/health`                   | Health check                            |
-| `GET`  | `/api/clientes`             | Buscar clientes por nome (`?nome=`)     |
-| `GET`  | `/api/clientes/todos`       | Lista completa de todos os clientes     |
-| `GET`  | `/api/clientes/:id`         | Detalhes do cliente (inclui documentos) |
-| `GET`  | `/api/clientes/:id/casos`   | Casos/processos do cliente              |
-| `GET`  | `/api/casos/:id`            | Detalhes completos de um caso/processo  |
-| `GET`  | `/api/casos/:id/andamentos` | Andamentos do caso                      |
+| Método | Rota                                            | Descrição                               |
+| ------ | ----------------------------------------------- | --------------------------------------- |
+| `GET`  | `/health`                                       | Health check                            |
+| `POST` | `/api/clientes`                                 | Cria cliente/contato                    |
+| `GET`  | `/api/clientes`                                 | Buscar clientes por nome (`?nome=`)     |
+| `GET`  | `/api/clientes/todos`                           | Lista completa de todos os clientes     |
+| `GET`  | `/api/clientes/:id`                             | Detalhes do cliente (inclui documentos) |
+| `GET`  | `/api/clientes/:id/casos`                       | Casos/processos do cliente              |
+| `GET`  | `/api/casos/:id`                                | Detalhes completos de um caso/processo  |
+| `GET`  | `/api/casos/:id/andamentos`                     | Andamentos do caso                      |
+| `POST` | `/api/atendimentos`                             | Agenda um atendimento                   |
+| `POST` | `/api/atendimentos/:id/transformar-em-caso`     | Converte atendimento em caso            |
+| `POST` | `/api/atendimentos/:id/transformar-em-processo` | Converte atendimento em processo        |
 
 ## Autenticação
 
@@ -28,6 +32,12 @@ O projeto mantém o servidor MCP em `stdio` para integrações locais e também 
 - Sessão: o cliente inicializa a sessão com `POST /mcp`; o servidor devolve `Mcp-Session-Id` e o cliente reutiliza esse header nas chamadas seguintes
 
 Para clientes remotos, prefira apontar para a URL interna do serviço no Coolify, por exemplo `http://api-astrea:3000/mcp`, ou para um domínio publicado se você decidir expor esse endpoint externamente.
+
+As operações de mutação novas também ficam disponíveis no MCP remoto/stdio:
+
+- `criar_cliente`
+- `transformar_atendimento_em_caso`
+- `transformar_atendimento_em_processo`
 
 ## Deploy com Docker
 

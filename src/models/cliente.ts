@@ -33,3 +33,30 @@ export interface ClienteResumido {
   etiquetas?: string[];
   criadoEm?: string;
 }
+
+export type PerfilContato = 'cliente' | 'contato';
+export type TipoContato = 'pessoa_fisica' | 'pessoa_juridica';
+
+export interface EnderecoCriacaoClienteInput {
+  cep?: string;
+  logradouro?: string;
+  numero?: string;
+  complemento?: string;
+  bairro?: string;
+  cidade?: string;
+  estado?: string;
+  pais?: string;
+}
+
+export interface CriarClienteInput {
+  nome: string;
+  perfil?: PerfilContato;
+  tipo?: TipoContato;
+  apelido?: string;
+  cpfCnpj?: string;
+  origem?: string;
+  site?: string;
+  email?: string;
+  telefone?: string;
+  endereco?: string | EnderecoCriacaoClienteInput;
+}
