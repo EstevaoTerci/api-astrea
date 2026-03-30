@@ -15,7 +15,7 @@ const envSchema = z.object({
   TRUST_PROXY: z.coerce.number().int().min(0).default(0),
 
   // Configurações do pool de browsers
-  BROWSER_POOL_SIZE: z.coerce.number().int().min(1).max(3).default(3),
+  BROWSER_POOL_SIZE: z.coerce.number().int().min(1).max(10).default(3),
   BROWSER_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
   BROWSER_IDLE_TTL_MS: z.coerce.number().int().min(0).default(900000),
   BROWSER_EXECUTABLE_PATH: z.string().optional(),

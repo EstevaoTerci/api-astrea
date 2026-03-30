@@ -1,8 +1,9 @@
 import { navigateTo } from '../browser/navigator.js';
-import { withBrowserContext, gapiCall, WORKSPACE_PAGE_PATH } from '../browser/astrea-http.js';
+import { withBrowserContext, gapiCall, getAstreaUserId, WORKSPACE_PAGE_PATH } from '../browser/astrea-http.js';
 import { TtlCache } from '../utils/cache.js';
 import { logger } from '../utils/logger.js';
 import { isRetryablePlaywrightError } from '../utils/retry.js';
+import { env } from '../config/env.js';
 import type { Usuario } from '../models/index.js';
 import type { ServiceResponse } from '../types/index.js';
 
@@ -71,7 +72,9 @@ export async function listarUsuarios(): Promise<ServiceResponse<Usuario[]>> {
     const usuarios = await withBrowserContext(async (page) => {
       await navigateTo(page, WORKSPACE_PAGE_PATH);
 
-      const res = await gapiCall<any>(page, 'users.userService', 'getAllUsers', {});
+      const res = await gapiCall<any>(page, 'users.userService', 'getAllUsers', {
+        tenantId: env.ASTREA_TENANT_ID,
+      });
 
       // Response may be array directly, or wrapped in items/users/data
       let rawUsers: GcpUser[] = [];
@@ -96,6 +99,46 @@ export async function listarUsuarios(): Promise<ServiceResponse<Usuario[]>> {
     return { ok: true, data: usuarios };
   } catch (err) {
     logger.error({ err }, 'Erro em listarUsuarios');
+    return {
+      ok: false,
+      error: {
+        message: err instanceof Error ? err.message : 'Erro desconhecido',
+        code: 'API_ERROR',
+        retryable: isRetryablePlaywrightError(err),
+      },
+    };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// obterUsuarioLogado
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function obterUsuarioLogado(): Promise<ServiceResponse<Usuario>> {
+  try {
+    const usuario = await withBrowserContext(async (page) => {
+      await navigateTo(page, WORKSPACE_PAGE_PATH);
+      const userId = await getAstreaUserId(page);
+
+      // Tenta buscar da lista (aproveita cache)
+      const listResult = await listarUsuarios();
+      if (listResult.ok) {
+        const found = listResult.data.find((u) => u.id === userId);
+        if (found) return found;
+      }
+
+      // Fallback: busca individual via GCP
+      const res = await gapiCall<any>(page, 'users.userService', 'getUser', {
+        tenantId: env.ASTREA_TENANT_ID,
+        userId,
+      });
+
+      return mapGcpUserToUsuario(res);
+    });
+
+    return { ok: true, data: usuario };
+  } catch (err) {
+    logger.error({ err }, 'Erro em obterUsuarioLogado');
     return {
       ok: false,
       error: {
