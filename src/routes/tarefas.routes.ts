@@ -9,8 +9,13 @@ const querySchema = z.object({
   status: z.string().optional(),
   prioridade: z.string().optional(),
   responsavel: z.string().optional(),
+  responsavelId: z.string().optional(),
   casoId: z.string().optional(),
   processoId: z.string().optional(),
+  incluirConcluidas: z
+    .union([z.boolean(), z.enum(['true', 'false', '1', '0'])])
+    .transform((v) => v === true || v === 'true' || v === '1')
+    .optional(),
   pagina: z.coerce.number().int().positive().default(1),
   limite: z.coerce.number().int().min(1).max(100).default(50),
 });

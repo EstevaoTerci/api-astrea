@@ -60,8 +60,10 @@ export interface FiltrosTarefa {
   status?: string;
   prioridade?: string;
   responsavel?: string;
+  responsavelId?: string;
   casoId?: string;
   processoId?: string;
+  incluirConcluidas?: boolean;
   pagina?: number;
   limite?: number;
 }

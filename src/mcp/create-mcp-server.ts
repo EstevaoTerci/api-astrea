@@ -170,11 +170,13 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'listar_tarefas',
-    'Lista tarefas com filtros.',
+    'Lista tarefas com filtros. Por padrão retorna apenas tarefas ativas (pendentes); passe incluirConcluidas=true para também trazer as concluídas (chamada extra ao Astrea). Use responsavelId para restringir ao escopo de tarefas de um usuário específico.',
     {
       status: z.string().optional(),
       casoId: z.string().optional(),
       responsavel: z.string().optional(),
+      responsavelId: z.string().optional(),
+      incluirConcluidas: z.boolean().optional(),
       pagina: z.number().optional(),
       limite: z.number().optional(),
     },

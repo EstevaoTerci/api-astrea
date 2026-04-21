@@ -76,15 +76,49 @@ function mapGcpTaskToTarefa(task: GcpTask): Tarefa {
 async function getAllTaskLists(page: Page, userId: string): Promise<GcpTaskList[]> {
   const res = await gapiCall<any>(page, 'workspace.taskListService', 'getAllTaskLists', { userId });
   if (Array.isArray(res)) return res as GcpTaskList[];
-  if (Array.isArray(res?.items)) return res.items as GcpTaskList[];
   if (Array.isArray(res?.taskLists)) return res.taskLists as GcpTaskList[];
+  if (Array.isArray(res?.result?.taskLists)) return res.result.taskLists as GcpTaskList[];
+  if (Array.isArray(res?.items)) return res.items as GcpTaskList[];
   return [];
 }
 
-async function getTasksFromList(page: Page, taskListId: string): Promise<GcpTask[]> {
+async function getInactiveTasksFromList(
+  page: Page,
+  taskListId: string,
+  userId: string,
+): Promise<GcpTask[]> {
+  const res = await gapiCall<any>(
+    page,
+    'workspace.taskListService',
+    'getAllOrderedDeactiveTasks',
+    {
+      taskListId,
+      userId,
+      orderBy: 'DUE_DATE',
+      isReverse: 'false',
+      limit: 200,
+      offset: 0,
+      cursor: '',
+    },
+  );
+  const arr = res?.inactiveTasks ?? res?.result?.inactiveTasks;
+  if (Array.isArray(arr)) return arr as GcpTask[];
+  return [];
+}
+
+async function getTasksFromList(
+  page: Page,
+  taskListId: string,
+  userId: string,
+): Promise<GcpTask[]> {
   const res = await gapiCall<any>(page, 'workspace.taskListService', 'getTaskListWithAllTasks', {
     taskListId,
+    userId,
+    orderBy: 'DUE_DATE',
+    isReverse: 'false',
   });
+  const active = res?.activeTasks ?? res?.result?.activeTasks;
+  if (Array.isArray(active)) return active as GcpTask[];
   if (Array.isArray(res?.tasks)) return res.tasks as GcpTask[];
   if (Array.isArray(res?.taskList)) return res.taskList as GcpTask[];
   if (Array.isArray(res?.items)) return res.items as GcpTask[];
@@ -100,25 +134,44 @@ export async function listarTarefas(filtros?: FiltrosTarefa): Promise<ServiceRes
     const result = await withBrowserContext(async (page) => {
       await navigateTo(page, WORKSPACE_PAGE_PATH);
 
-      const userId = await getAstreaUserId(page);
+      const sessionUserId = await getAstreaUserId(page);
+      const userId = filtros?.responsavelId ?? sessionUserId;
       const lists = await getAllTaskLists(page, userId);
 
       const allTasks: Tarefa[] = [];
+      const seenIds = new Set<string>();
+
+      const pushTasks = (tasks: GcpTask[]) => {
+        for (const t of tasks) {
+          const tarefa = mapGcpTaskToTarefa(t);
+          if (tarefa.id && seenIds.has(tarefa.id)) continue;
+          if (tarefa.id) seenIds.add(tarefa.id);
+          allTasks.push(tarefa);
+        }
+      };
 
       for (const list of lists) {
         const listId = String(list.id ?? list.taskListId ?? '');
         if (!listId) continue;
 
         try {
-          const tasks = await getTasksFromList(page, listId);
-          for (const t of tasks) {
-            allTasks.push(mapGcpTaskToTarefa(t));
-          }
+          pushTasks(await getTasksFromList(page, listId, userId));
         } catch (listErr) {
           logger.warn(
             { listId, err: String(listErr) },
-            'Erro ao buscar tarefas da lista — ignorando lista',
+            'Erro ao buscar tarefas ativas da lista — ignorando lista',
           );
+        }
+
+        if (filtros?.incluirConcluidas) {
+          try {
+            pushTasks(await getInactiveTasksFromList(page, listId, userId));
+          } catch (listErr) {
+            logger.warn(
+              { listId, err: String(listErr) },
+              'Erro ao buscar tarefas concluídas da lista — ignorando lista',
+            );
+          }
         }
       }
 
@@ -132,6 +185,10 @@ export async function listarTarefas(filtros?: FiltrosTarefa): Promise<ServiceRes
       if (filtros?.casoId || filtros?.processoId) {
         const targetId = filtros.casoId ?? filtros.processoId;
         filtered = filtered.filter((t) => t.casoId === targetId);
+      }
+
+      if (filtros?.responsavelId) {
+        filtered = filtered.filter((t) => t.responsavelId === filtros.responsavelId);
       }
 
       if (filtros?.responsavel) {
