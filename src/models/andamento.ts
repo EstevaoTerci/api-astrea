@@ -6,4 +6,7 @@ export interface Andamento {
   descricao: string;
   tipo?: string;
   publicadoEm?: string;
+  responsavel?: string;
+  responsavelId?: string;
+  casoTitulo?: string;
 }

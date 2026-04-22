@@ -1,122 +1,169 @@
-import { withBrowserContext } from '../browser/astrea-http.js';
-import { navigateTo, waitForElement } from '../browser/navigator.js';
+import { Page } from 'playwright';
+import {
+  astreaApiPost,
+  getAstreaUserId,
+  withBrowserContext,
+  WORKSPACE_PAGE_PATH,
+} from '../browser/astrea-http.js';
+import { navigateTo } from '../browser/navigator.js';
 import { isRetryablePlaywrightError } from '../utils/retry.js';
 import { logger } from '../utils/logger.js';
 import type { Publicacao } from '../models/index.js';
 import type { FiltrosPublicacao, ServiceResponse, PaginationMeta } from '../types/index.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Seletores reais — página de publicações (clippings)
-// URL: https://astrea.net.br/#/main/clippings
-// DOM: cada publicação é um <article> com filhos:
-//   [0]=checkbox [1]=datas [2]=vazio [3]=processo+caso [4]=diário [5]=nomePesquisado [6]=status [7]=ações [8]=conteúdo
+// Endpoint REST: POST /api/v2/clipping-service/query
+// Descoberto interceptando os XHRs da página /#/main/clippings.
+// Payload suporta filtros server-side: status, fromDate/toDate, caseResponsibleId,
+// paginação por cursor/page/limit. Shape da resposta:
+//   { clippings: [...], totalElements, currentPage, pageSize, totalPages }
 // ─────────────────────────────────────────────────────────────────────────────
-const SELECTORS = {
-  CLIPPINGS_PATH: '/#/main/clippings',
-  ARTICLE: 'article',
-};
 
-/** Converte DD/MM/YYYY → YYYY-MM-DD */
-function parseDateBR(date: string): string {
-  const m = date.match(/(\d{2})\/(\d{2})\/(\d{4})/);
-  if (!m) return date;
-  return `${m[3]}-${m[2]}-${m[1]}`;
+interface RawClipping {
+  id?: number | string;
+  releaseDate?: string;
+  clippingDate?: string;
+  publishDate?: string;
+  content?: string;
+  description?: string;
+  snippet?: string;
+  body?: string;
+  processNumber?: string;
+  lawsuitNumber?: string;
+  caseNumber?: string;
+  caseId?: number | string;
+  caseTitle?: string;
+  court?: string;
+  courtCode?: string;
+  tribunal?: string;
+  status?: string;
+  treated?: boolean;
+  caseResponsibleName?: string;
+  caseResponsibleId?: number | string;
+  responsibleName?: string;
+  responsible?: number | string;
+  clippingSearchName?: string;
+  [k: string]: unknown;
+}
+
+interface ClippingQueryResponse {
+  clippings?: RawClipping[];
+  items?: RawClipping[];
+  totalElements?: number;
+  currentPage?: number;
+  pageSize?: number;
+  totalPages?: number;
+  cursor?: string;
+}
+
+function toDateOnly(iso?: string): string {
+  if (!iso) return '';
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toISOString().slice(0, 10);
+}
+
+function mapClippingToPublicacao(c: RawClipping): Publicacao {
+  const id = String(c.id ?? '');
+  const data = toDateOnly(c.releaseDate ?? c.clippingDate ?? c.publishDate);
+  const processoNumero = String(
+    c.processNumber ?? c.lawsuitNumber ?? c.caseNumber ?? c.caseTitle ?? '',
+  );
+  const tribunal = c.court ?? c.courtCode ?? c.tribunal ?? undefined;
+  const conteudo = String(c.content ?? c.description ?? c.snippet ?? c.body ?? '');
+  const lida =
+    typeof c.treated === 'boolean'
+      ? c.treated
+      : typeof c.status === 'string'
+        ? c.status.toUpperCase() !== 'RECEIVED'
+        : undefined;
+  const responsavel = c.caseResponsibleName ?? c.responsibleName ?? c.clippingSearchName;
+
+  return {
+    id,
+    processoNumero,
+    tribunal,
+    data,
+    conteudo,
+    lida,
+    responsavel: responsavel ? String(responsavel) : undefined,
+  };
+}
+
+async function queryClippings(
+  page: Page,
+  userId: string,
+  filtros?: FiltrosPublicacao,
+): Promise<{ items: Publicacao[]; totalElements: number }> {
+  const pagina = filtros?.pagina ?? 1;
+  const limite = filtros?.limite ?? 50;
+
+  // Converter filtro "dias" para fromDate (backend aceita fromDate/toDate)
+  let fromDate: string | null = null;
+  if (filtros?.dataInicio) {
+    fromDate = filtros.dataInicio;
+  } else if (filtros?.dias) {
+    const d = new Date();
+    d.setDate(d.getDate() - filtros.dias);
+    fromDate = d.toISOString().slice(0, 10);
+  }
+  const toDate: string | null = filtros?.dataFim ?? null;
+
+  // Tradução de lida → status no backend
+  // lida=true → TREATED? Alguns valores são rejeitados pelo backend. Deixar
+  // filtro "lida" em memória por compatibilidade.
+  const payload = {
+    order: '-releaseDate',
+    cursor: '',
+    page: pagina - 1,
+    limit: limite,
+    caseId: null,
+    caseTitle: null,
+    fromDate,
+    toDate,
+    endCreateDate: null,
+    customerId: null,
+    dateFilter: null,
+    clippingTypeFilter: null,
+    subpoenaStatusFilter: null,
+    caseStatusFilter: null,
+    status: null,
+    clippingSearchName: null,
+    state: null,
+    userId,
+    caseResponsibleId: null,
+    dateToShow: 'CLIPPING_DATE',
+  };
+
+  const res = await astreaApiPost<ClippingQueryResponse>(
+    page,
+    '/clipping-service/query',
+    payload,
+  );
+
+  const raw = res?.clippings ?? res?.items ?? [];
+  const mapped = raw.map(mapClippingToPublicacao);
+  return { items: mapped, totalElements: res?.totalElements ?? mapped.length };
 }
 
 export async function listarPublicacoes(
   filtros?: FiltrosPublicacao,
 ): Promise<ServiceResponse<Publicacao[]>> {
   try {
-    const data = await withBrowserContext(async (page) => {
-      // Navega para /#/main/clippings
-      await navigateTo(page, SELECTORS.CLIPPINGS_PATH);
-      await waitForElement(page, SELECTORS.ARTICLE).catch(() => {});
-      await page.waitForTimeout(1000);
+    const result = await withBrowserContext(async (page) => {
+      await navigateTo(page, WORKSPACE_PAGE_PATH);
+      const userId = await getAstreaUserId(page);
 
-      // Extrai via evaluate — cada article tem estrutura bem definida
-      const rawItems: Array<{
-        id: string;
-        processoNumero: string;
-        tribunal: string | undefined;
-        data: string;
-        conteudo: string;
-        lida: boolean;
-        responsavel: string | undefined;
-      }> = await page.evaluate(() => {
-        const articles = document.querySelectorAll('article');
-        const result: Array<{
-          id: string;
-          processoNumero: string;
-          tribunal: string | undefined;
-          data: string;
-          conteudo: string;
-          lida: boolean;
-          responsavel: string | undefined;
-        }> = [];
-        let idx = 0;
+      const { items, totalElements } = await queryClippings(page, userId, filtros);
 
-        for (const article of articles) {
-          const kids = [...article.children];
-          if (kids.length < 7) continue; // estrutura incompleta
+      let filtered = items;
 
-          // [1] datas: 1º <p> = data disponibilização, 2º <p> = "Publicado em: ..."
-          const dateEl = kids[1];
-          const dataDisp = dateEl?.children[0]?.textContent?.trim() ?? '';
-          const dataPubRaw = dateEl?.children[1]?.textContent?.trim() ?? '';
-          const data = dataDisp || dataPubRaw.replace(/^Publicado em:\s*/i, '');
-
-          // [3] processo + link do caso
-          const processoEl = kids[3];
-          const processoNumero = processoEl?.children[0]?.textContent?.trim() ?? '';
-          const casoLink = processoEl?.querySelector('a');
-          const casoHref = casoLink?.getAttribute('href') ?? '';
-          const casoIdMatch = casoHref.match(/folders\/detail\/(\d+)/);
-          const casoId = casoIdMatch?.[1] ?? '';
-
-          // [4] diário: 1º <p> = código do tribunal
-          const tribunal = kids[4]?.children[0]?.textContent?.trim() || undefined;
-
-          // [5] nomePesquisado: nome do advogado monitorado cuja busca capturou a publicação
-          const responsavel = kids[5]?.textContent?.trim() || undefined;
-
-          // [6] status (7º filho = index 6)
-          const status = kids[6]?.textContent?.trim() ?? '';
-
-          // [8] conteúdo expandido (9º filho se existir)
-          const conteudoEl = kids[8]?.children[0]?.children[0];
-          const conteudo = conteudoEl?.textContent?.trim() ?? `Processo: ${processoNumero}`;
-
-          if (!processoNumero && !casoId) continue;
-
-          result.push({
-            id: `pub-${casoId || idx}`,
-            processoNumero,
-            tribunal,
-            data,
-            conteudo,
-            lida: status !== 'Não tratada',
-            responsavel,
-          });
-          idx++;
-        }
-        return result;
-      });
-
-      // Normaliza datas e aplica filtros
-      const normalized: Publicacao[] = rawItems.map((p) => ({
-        ...p,
-        data: parseDateBR(p.data),
-      }));
-
-      let filtered = normalized;
-      if (filtros?.lida !== undefined) filtered = filtered.filter((p) => p.lida === filtros.lida);
-      if (filtros?.dataInicio) filtered = filtered.filter((p) => p.data >= filtros.dataInicio!);
-      if (filtros?.dataFim) filtered = filtered.filter((p) => p.data <= filtros.dataFim!);
-      if (filtros?.dias) {
-        const cutoff = new Date();
-        cutoff.setDate(cutoff.getDate() - filtros.dias);
-        filtered = filtered.filter((p) => p.data >= cutoff.toISOString().slice(0, 10));
+      if (filtros?.lida !== undefined) {
+        filtered = filtered.filter((p) => p.lida === filtros.lida);
       }
+
       if (filtros?.responsavel) {
         const q = filtros.responsavel.toLowerCase();
         filtered = filtered.filter((p) => p.responsavel?.toLowerCase().includes(q));
@@ -124,20 +171,24 @@ export async function listarPublicacoes(
 
       const pagina = filtros?.pagina ?? 1;
       const limite = filtros?.limite ?? 50;
-      const paged = filtered.slice((pagina - 1) * limite, pagina * limite);
-      const meta: PaginationMeta = { pagina, limite, total: filtered.length };
+      // totalElements vem do backend (global); se houve filtro em memória, o total
+      // efetivo é `filtered.length` do slice atual. Reportar o total do backend
+      // quando não há filtros em memória; caso contrário, `filtered.length`.
+      const total =
+        filtros?.lida !== undefined || filtros?.responsavel ? filtered.length : totalElements;
 
-      return { items: paged, meta };
+      const meta: PaginationMeta = { pagina, limite, total };
+      return { items: filtered, meta };
     });
 
-    return { ok: true, data: data.items, meta: data.meta };
+    return { ok: true, data: result.items, meta: result.meta };
   } catch (err) {
     logger.error({ err }, 'Erro em listarPublicacoes');
     return {
       ok: false,
       error: {
         message: err instanceof Error ? err.message : 'Erro desconhecido',
-        code: 'SCRAPE_ERROR',
+        code: 'API_ERROR',
         retryable: isRetryablePlaywrightError(err),
       },
     };

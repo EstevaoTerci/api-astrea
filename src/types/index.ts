@@ -52,6 +52,9 @@ export interface FiltrosAndamento {
   dataInicio?: string;
   dataFim?: string;
   dias?: number;
+  responsavel?: string;
+  responsavelId?: string;
+  tipo?: string;
   pagina?: number;
   limite?: number;
 }

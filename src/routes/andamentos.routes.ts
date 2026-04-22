@@ -9,6 +9,9 @@ const filtroSchema = z.object({
   dataInicio: z.string().optional(),
   dataFim: z.string().optional(),
   dias: z.coerce.number().int().positive().optional(),
+  responsavel: z.string().optional(),
+  responsavelId: z.string().optional(),
+  tipo: z.string().optional(),
   pagina: z.coerce.number().int().positive().default(1),
   limite: z.coerce.number().int().min(1).max(100).default(50),
 });

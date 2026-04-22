@@ -271,12 +271,15 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'listar_andamentos',
-    'Lista os andamentos (histórico) de um processo específico. Aceita filtro por janela de data (dataInicio/dataFim em YYYY-MM-DD ou dias para últimos N dias). NÃO aceita filtro por responsável — a página de histórico do Astrea não expõe advogado por andamento.',
+    'Lista os andamentos (histórico) de um processo específico. Aceita filtro por janela de data (dataInicio/dataFim em YYYY-MM-DD ou dias para últimos N dias), por tipo (ex.: APPOINTMENT, DONE_TASK), e por responsável (responsavelId para id exato, responsavel para substring do nome).',
     {
       processoId: z.string(),
       dataInicio: z.string().optional(),
       dataFim: z.string().optional(),
       dias: z.number().optional(),
+      responsavel: z.string().optional(),
+      responsavelId: z.string().optional(),
+      tipo: z.string().optional(),
       pagina: z.number().optional(),
       limite: z.number().optional(),
     },
@@ -296,9 +299,14 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'andamentos_recentes',
-    'Retorna andamentos dos últimos N dias do processo mais recentemente movimentado do escritório (default 30 dias).',
+    'Retorna andamentos recentes de todos os processos do escritório (default últimos 30 dias). Aceita filtros por janela de data (dias, dataInicio/dataFim), por tipo e por responsável (responsavelId ou responsavel).',
     {
       dias: z.number().optional(),
+      dataInicio: z.string().optional(),
+      dataFim: z.string().optional(),
+      responsavel: z.string().optional(),
+      responsavelId: z.string().optional(),
+      tipo: z.string().optional(),
       pagina: z.number().optional(),
       limite: z.number().optional(),
     },
