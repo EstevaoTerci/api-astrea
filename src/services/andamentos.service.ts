@@ -38,7 +38,31 @@ export async function listarAndamentos(
         .getByText('Histórico', { exact: true })
         .click()
         .catch(() => {});
-      await page.waitForTimeout(800);
+      await page.waitForTimeout(500);
+
+      // A UI do histórico inicia com filtro selecionado mas sem aplicar — exige
+      // clique em "Aplicar" para carregar os registros.
+      await page
+        .getByText('Aplicar', { exact: true })
+        .click()
+        .catch(() => {});
+
+      // Aguarda o histórico terminar de carregar (até aparecer uma data DD/MM/YYYY
+      // em <main> ou a mensagem "Carregando..." sumir).
+      await page
+        .waitForFunction(
+          () => {
+            const main = document.querySelector('main');
+            if (!main) return false;
+            const text = (main as HTMLElement).innerText ?? '';
+            if (/Carregando\.\.\./i.test(text)) return false;
+            return [...main.querySelectorAll('p')].some((p) =>
+              /^\d{2}\/\d{2}\/\d{4}$/.test((p.textContent ?? '').trim()),
+            );
+          },
+          { timeout: 15000 },
+        )
+        .catch(() => {});
 
       // Tenta expandir todos via "Ver todos"
       await page
@@ -141,7 +165,28 @@ export async function buscarAndamentosRecentes(
         .getByText('Histórico', { exact: true })
         .click()
         .catch(() => {});
-      await page.waitForTimeout(800);
+      await page.waitForTimeout(500);
+
+      await page
+        .getByText('Aplicar', { exact: true })
+        .click()
+        .catch(() => {});
+
+      await page
+        .waitForFunction(
+          () => {
+            const main = document.querySelector('main');
+            if (!main) return false;
+            const text = (main as HTMLElement).innerText ?? '';
+            if (/Carregando\.\.\./i.test(text)) return false;
+            return [...main.querySelectorAll('p')].some((p) =>
+              /^\d{2}\/\d{2}\/\d{4}$/.test((p.textContent ?? '').trim()),
+            );
+          },
+          { timeout: 15000 },
+        )
+        .catch(() => {});
+
       await page
         .getByText('Ver todos', { exact: true })
         .click()

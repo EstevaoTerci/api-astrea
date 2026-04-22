@@ -13,6 +13,7 @@ const querySchema = z.object({
     .string()
     .transform((v) => v === 'true')
     .optional(),
+  responsavel: z.string().optional(),
   pagina: z.coerce.number().int().positive().default(1),
   limite: z.coerce.number().int().min(1).max(100).default(50),
 });

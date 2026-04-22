@@ -7,4 +7,5 @@ export interface Publicacao {
   tipo?: string;
   prazo?: string;
   lida?: boolean;
+  responsavel?: string;
 }

@@ -41,6 +41,7 @@ export async function listarPublicacoes(
         data: string;
         conteudo: string;
         lida: boolean;
+        responsavel: string | undefined;
       }> = await page.evaluate(() => {
         const articles = document.querySelectorAll('article');
         const result: Array<{
@@ -50,6 +51,7 @@ export async function listarPublicacoes(
           data: string;
           conteudo: string;
           lida: boolean;
+          responsavel: string | undefined;
         }> = [];
         let idx = 0;
 
@@ -74,6 +76,9 @@ export async function listarPublicacoes(
           // [4] diário: 1º <p> = código do tribunal
           const tribunal = kids[4]?.children[0]?.textContent?.trim() || undefined;
 
+          // [5] nomePesquisado: nome do advogado monitorado cuja busca capturou a publicação
+          const responsavel = kids[5]?.textContent?.trim() || undefined;
+
           // [6] status (7º filho = index 6)
           const status = kids[6]?.textContent?.trim() ?? '';
 
@@ -90,6 +95,7 @@ export async function listarPublicacoes(
             data,
             conteudo,
             lida: status !== 'Não tratada',
+            responsavel,
           });
           idx++;
         }
@@ -110,6 +116,10 @@ export async function listarPublicacoes(
         const cutoff = new Date();
         cutoff.setDate(cutoff.getDate() - filtros.dias);
         filtered = filtered.filter((p) => p.data >= cutoff.toISOString().slice(0, 10));
+      }
+      if (filtros?.responsavel) {
+        const q = filtros.responsavel.toLowerCase();
+        filtered = filtered.filter((p) => p.responsavel?.toLowerCase().includes(q));
       }
 
       const pagina = filtros?.pagina ?? 1;

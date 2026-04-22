@@ -76,6 +76,7 @@ export interface FiltrosPublicacao {
   dataFim?: string;
   dias?: number;
   lida?: boolean;
+  responsavel?: string;
   pagina?: number;
   limite?: number;
 }

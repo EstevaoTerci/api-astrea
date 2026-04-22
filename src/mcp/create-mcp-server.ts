@@ -22,6 +22,11 @@ import {
 } from '../services/atendimentos.service.js';
 import { listarUsuarios } from '../services/usuarios.service.js';
 import { adicionarDocumentoLink } from '../services/documentos.service.js';
+import {
+  listarAndamentos,
+  buscarAndamentosRecentes,
+} from '../services/andamentos.service.js';
+import { listarPublicacoes } from '../services/publicacoes.service.js';
 
 export function createMcpServer(): McpServer {
   const server = new McpServer({
@@ -253,6 +258,77 @@ export function createMcpServer(): McpServer {
     },
     async (input) => {
       const result = await buscarTarefasPorProcesso(input.processoId);
+      if (!result.ok) {
+        return {
+          content: [{ type: 'text', text: `Erro: ${result.error.message}` }],
+          isError: true,
+        };
+      }
+      const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
+      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
+    },
+  );
+
+  server.tool(
+    'listar_andamentos',
+    'Lista os andamentos (histórico) de um processo específico. Aceita filtro por janela de data (dataInicio/dataFim em YYYY-MM-DD ou dias para últimos N dias). NÃO aceita filtro por responsável — a página de histórico do Astrea não expõe advogado por andamento.',
+    {
+      processoId: z.string(),
+      dataInicio: z.string().optional(),
+      dataFim: z.string().optional(),
+      dias: z.number().optional(),
+      pagina: z.number().optional(),
+      limite: z.number().optional(),
+    },
+    async (input) => {
+      const { processoId, ...filtros } = input;
+      const result = await listarAndamentos(processoId, filtros);
+      if (!result.ok) {
+        return {
+          content: [{ type: 'text', text: `Erro: ${result.error.message}` }],
+          isError: true,
+        };
+      }
+      const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
+      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
+    },
+  );
+
+  server.tool(
+    'andamentos_recentes',
+    'Retorna andamentos dos últimos N dias do processo mais recentemente movimentado do escritório (default 30 dias).',
+    {
+      dias: z.number().optional(),
+      pagina: z.number().optional(),
+      limite: z.number().optional(),
+    },
+    async (input) => {
+      const result = await buscarAndamentosRecentes(input);
+      if (!result.ok) {
+        return {
+          content: [{ type: 'text', text: `Erro: ${result.error.message}` }],
+          isError: true,
+        };
+      }
+      const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
+      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
+    },
+  );
+
+  server.tool(
+    'listar_publicacoes',
+    'Lista publicações (clippings do DJE) do escritório. Filtros: dataInicio/dataFim (YYYY-MM-DD), dias (últimos N), lida (boolean), responsavel (busca por substring no nome do advogado monitorado cuja pesquisa capturou a publicação).',
+    {
+      dataInicio: z.string().optional(),
+      dataFim: z.string().optional(),
+      dias: z.number().optional(),
+      lida: z.boolean().optional(),
+      responsavel: z.string().optional(),
+      pagina: z.number().optional(),
+      limite: z.number().optional(),
+    },
+    async (input) => {
+      const result = await listarPublicacoes(input);
       if (!result.ok) {
         return {
           content: [{ type: 'text', text: `Erro: ${result.error.message}` }],
