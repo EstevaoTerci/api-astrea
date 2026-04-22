@@ -131,16 +131,24 @@ async function queryHistory(
   return raw.map(mapHistoricalToAndamento);
 }
 
+/**
+ * Conta o total de andamentos que batem com o filtro.
+ *
+ * O endpoint /historical/count devolve `count = min(total_real, payload.limit)` —
+ * ou seja, se enviarmos `limit: 10` vem `count: 10` mesmo havendo milhares. Para
+ * descobrir o total precisamos sobrescrever o limit com um teto alto.
+ */
+const COUNT_HARD_CAP = 100000;
+
 async function countHistory(
   page: Page,
   payload: Record<string, unknown>,
 ): Promise<number | undefined> {
   try {
-    const res = await astreaApiPost<HistoryCountResponse>(
-      page,
-      '/historical/count',
-      payload,
-    );
+    const res = await astreaApiPost<HistoryCountResponse>(page, '/historical/count', {
+      ...payload,
+      limit: COUNT_HARD_CAP,
+    });
     return res?.count ?? res?.total ?? res?.totalElements;
   } catch {
     return undefined;
@@ -168,9 +176,7 @@ export async function listarAndamentos(
       let total = filtered.length;
       if (!filtros?.responsavel && !filtros?.responsavelId) {
         const backendTotal = await countHistory(page, payload);
-        if (typeof backendTotal === 'number' && backendTotal >= filtered.length) {
-          total = backendTotal;
-        }
+        if (typeof backendTotal === 'number') total = backendTotal;
       }
 
       const meta: PaginationMeta = { pagina, limite, total };
@@ -214,9 +220,7 @@ export async function buscarAndamentosRecentes(
       let total = filtered.length;
       if (!filtros?.responsavel && !filtros?.responsavelId) {
         const backendTotal = await countHistory(page, payload);
-        if (typeof backendTotal === 'number' && backendTotal >= filtered.length) {
-          total = backendTotal;
-        }
+        if (typeof backendTotal === 'number') total = backendTotal;
       }
 
       const meta: PaginationMeta = { pagina, limite, total };
