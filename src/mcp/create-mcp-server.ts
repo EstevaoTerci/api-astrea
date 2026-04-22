@@ -170,13 +170,16 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'listar_tarefas',
-    'Lista tarefas com filtros. Por padrão retorna apenas tarefas ativas (pendentes); passe incluirConcluidas=true para também trazer as concluídas (chamada extra ao Astrea). Use responsavelId para restringir ao escopo de tarefas de um usuário específico.',
+    'Lista tarefas com filtros. Por padrão retorna apenas tarefas ativas (pendentes); passe incluirConcluidas=true para também trazer as concluídas (chamada extra ao Astrea). Use responsavelId para restringir ao escopo de tarefas de um usuário específico. Para filtrar por prazo, use dias (ex.: dias=7 para próximos 7 dias a partir de hoje) ou prazoInicio/prazoFim no formato YYYY-MM-DD.',
     {
       status: z.string().optional(),
       casoId: z.string().optional(),
       responsavel: z.string().optional(),
       responsavelId: z.string().optional(),
       incluirConcluidas: z.boolean().optional(),
+      prazoInicio: z.string().optional(),
+      prazoFim: z.string().optional(),
+      dias: z.number().optional(),
       pagina: z.number().optional(),
       limite: z.number().optional(),
     },

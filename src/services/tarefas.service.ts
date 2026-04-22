@@ -200,6 +200,34 @@ export async function listarTarefas(filtros?: FiltrosTarefa): Promise<ServiceRes
         filtered = filtered.filter((t) => t.prioridade === filtros.prioridade);
       }
 
+      if (filtros?.prazoInicio || filtros?.prazoFim || filtros?.dias) {
+        let start: Date | null = null;
+        let end: Date | null = null;
+
+        if (filtros.prazoInicio) {
+          start = new Date(`${filtros.prazoInicio}T00:00:00.000Z`);
+        }
+        if (filtros.prazoFim) {
+          end = new Date(`${filtros.prazoFim}T23:59:59.999Z`);
+        }
+        if (filtros.dias && !start && !end) {
+          const now = new Date();
+          start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
+          end = new Date(start.getTime() + filtros.dias * 24 * 60 * 60 * 1000 - 1);
+        } else if (filtros.dias && start && !end) {
+          end = new Date(start.getTime() + filtros.dias * 24 * 60 * 60 * 1000 - 1);
+        }
+
+        filtered = filtered.filter((t) => {
+          if (!t.prazo) return false;
+          const d = new Date(t.prazo);
+          if (Number.isNaN(d.getTime())) return false;
+          if (start && d < start) return false;
+          if (end && d > end) return false;
+          return true;
+        });
+      }
+
       const pagina = filtros?.pagina ?? 1;
       const limite = filtros?.limite ?? 50;
       const paged = filtered.slice((pagina - 1) * limite, pagina * limite);

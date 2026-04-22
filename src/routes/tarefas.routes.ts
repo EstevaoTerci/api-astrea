@@ -16,6 +16,15 @@ const querySchema = z.object({
     .union([z.boolean(), z.enum(['true', 'false', '1', '0'])])
     .transform((v) => v === true || v === 'true' || v === '1')
     .optional(),
+  prazoInicio: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'prazoInicio deve estar no formato YYYY-MM-DD')
+    .optional(),
+  prazoFim: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'prazoFim deve estar no formato YYYY-MM-DD')
+    .optional(),
+  dias: z.coerce.number().int().positive().optional(),
   pagina: z.coerce.number().int().positive().default(1),
   limite: z.coerce.number().int().min(1).max(100).default(50),
 });

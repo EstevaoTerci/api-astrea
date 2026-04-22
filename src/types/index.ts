@@ -64,6 +64,9 @@ export interface FiltrosTarefa {
   casoId?: string;
   processoId?: string;
   incluirConcluidas?: boolean;
+  prazoInicio?: string;
+  prazoFim?: string;
+  dias?: number;
   pagina?: number;
   limite?: number;
 }
