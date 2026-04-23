@@ -379,6 +379,23 @@ function mapContactListItemResumido(item: AstreaContactListItem): ClienteResumid
   };
 }
 
+/**
+ * Formata dígitos de CPF (11) ou CNPJ (14) no padrão brasileiro com máscara.
+ * O campo `taxDocumentNumber` no Astrea é armazenado com máscara, e a busca
+ * `queryDTO.text` faz match literal — sem máscara, não casa.
+ * Retorna undefined se a entrada não tem 11 nem 14 dígitos.
+ */
+function formatarDocumentoComMascara(documento: string): string | undefined {
+  const d = documento.replace(/\D/g, '');
+  if (d.length === 11) {
+    return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`;
+  }
+  if (d.length === 14) {
+    return `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12)}`;
+  }
+  return undefined;
+}
+
 function buildSearchPayload(text: string, apiPage: number, limit: number) {
   return {
     queryDTO: {
@@ -424,10 +441,13 @@ export async function listarClientes(
       const limite = filtros?.limite ?? 50;
 
       const cpfDigits = filtros?.cpfCnpj ? filtros.cpfCnpj.replace(/\D/g, '') : '';
-      // O queryDTO.text da API /contact/all é o único vetor de busca server-side:
-      // casa tanto nome quanto documento. Preferir nome; usar cpfCnpj normalizado
-      // se nome estiver ausente.
-      const searchText = filtros?.nome?.trim() || cpfDigits || '';
+      // O queryDTO.text da API /contact/all busca por nome e por documento, MAS
+      // o match em documento é literal contra `taxDocumentNumber`, que o Astrea
+      // armazena com máscara ("110.010.357-04"). Sem máscara o backend retorna 0.
+      // Preferir nome; senão usar cpfCnpj formatado com máscara. Se o filtro
+      // vier com tamanho inesperado (nem CPF nem CNPJ), cai em string vazia.
+      const cpfComMascara = cpfDigits ? formatarDocumentoComMascara(cpfDigits) : undefined;
+      const searchText = filtros?.nome?.trim() || cpfComMascara || '';
 
       const response = await astreaApiPost<AstreaContactListResponse>(
         page,
