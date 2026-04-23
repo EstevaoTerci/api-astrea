@@ -1,6 +1,10 @@
 export interface Caso {
   id: string;
   titulo: string;
+  /** URL direta do caso no app do Astrea. */
+  url?: string;
+  /** URL direta do cliente principal no app do Astrea (quando houver clienteId). */
+  urlCliente?: string;
   descricao?: string;
   status?: string;
   area?: string;

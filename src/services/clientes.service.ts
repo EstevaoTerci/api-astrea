@@ -3,6 +3,7 @@ import { withBrowserContext } from '../browser/astrea-http.js';
 import { navigateTo } from '../browser/navigator.js';
 import { isRetryablePlaywrightError } from '../utils/retry.js';
 import { logger } from '../utils/logger.js';
+import { urlContato } from '../utils/astrea-urls.js';
 import type {
   Cliente,
   ClienteResumido,
@@ -293,9 +294,11 @@ function mapContactDetails(d: AstreaContactDetails): Cliente {
 
   const endereco = d.addresses?.[0]?.value ?? undefined;
 
+  const id = String(d.id);
   return {
-    id: String(d.id),
+    id,
     nome: d.name?.trim() ?? '',
+    url: urlContato(id),
     cpfCnpj: d.taxDocumentNumber ?? undefined,
     email,
     telefone,
@@ -321,9 +324,11 @@ function mapContactListItem(item: AstreaContactListItem): Cliente {
 
   const email = item.emails?.[0]?.address ?? (item.emails?.[0] as any)?.email ?? undefined;
 
+  const id = String(item.id);
   return {
-    id: String(item.id),
+    id,
     nome: item.name?.trim() ?? '',
+    url: urlContato(id),
     email,
     telefone,
     tipo:
@@ -354,9 +359,11 @@ function mapContactListItemResumido(item: AstreaContactListItem): ClienteResumid
 
   const etiquetas = item.tags?.map((t) => t.name ?? '').filter(Boolean) ?? undefined;
 
+  const id = String(item.id);
   return {
-    id: String(item.id),
+    id,
     nome: item.name?.trim() ?? '',
+    url: urlContato(id),
     classificacao: item.classificationName ?? undefined,
     tipo:
       item.contactKind === 'PERSON'

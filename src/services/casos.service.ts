@@ -3,6 +3,7 @@ import { withBrowserContext } from '../browser/astrea-http.js';
 import { navigateTo } from '../browser/navigator.js';
 import { isRetryablePlaywrightError } from '../utils/retry.js';
 import { logger } from '../utils/logger.js';
+import { urlCaso, urlContato } from '../utils/astrea-urls.js';
 import type {
   CasoProcesso,
   ParteProcesso,
@@ -336,10 +337,12 @@ async function buildCasoProcesso(
 ): Promise<CasoProcesso> {
   const etiquetas = await resolveTagLabels(page, folder.tagIds ?? []);
 
+  const casoId = String(folder.id);
   const caso: CasoProcesso = {
     // Identificação
-    id: String(folder.id),
+    id: casoId,
     titulo: folder.title ?? '',
+    url: urlCaso(casoId),
     isProcesso: folder.isLawsuit,
 
     // Classificação e status
@@ -354,6 +357,7 @@ async function buildCasoProcesso(
     // Partes
     clienteId: folder.customer?.contactId ? String(folder.customer.contactId) : undefined,
     clienteNome: folder.customer?.contactName ?? undefined,
+    urlCliente: folder.customer?.contactId ? urlContato(String(folder.customer.contactId)) : undefined,
     partes: mapPartes(folder),
 
     // Dados processuais
@@ -521,7 +525,7 @@ export async function listarCasos(filtros?: FiltrosCaso): Promise<ServiceRespons
             ?.replace(/\s+/g, ' ')
             .trim() || undefined;
 
-        casos.push({ id, titulo, clienteNome, updatedAt });
+        casos.push({ id, titulo, url: id ? urlCaso(id) : undefined, clienteNome, updatedAt });
       }
 
       let filtered = casos;

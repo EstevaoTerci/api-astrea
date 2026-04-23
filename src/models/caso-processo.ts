@@ -141,6 +141,9 @@ export interface CasoProcesso {
   /** Título do caso/processo (ex: "Restabelecimento de Beneficio Assitencial - ADONIAS") */
   titulo: string;
 
+  /** URL direta do caso/processo no app do Astrea (https://astrea.net.br/#/main/folders/detail/{id}). */
+  url?: string;
+
   /**
    * Flag que indica se este registro é um processo judicial.
    * Quando `true`, os campos específicos de processo abaixo estarão preenchidos.
@@ -177,6 +180,9 @@ export interface CasoProcesso {
 
   /** Nome do cliente principal */
   clienteNome?: string;
+
+  /** URL direta do cliente principal no app do Astrea (quando houver clienteId). */
+  urlCliente?: string;
 
   /**
    * Lista de todas as partes envolvidas (autor, réu, litisconsortes, etc.).

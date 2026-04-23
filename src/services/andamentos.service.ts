@@ -8,6 +8,7 @@ import {
 import { navigateTo } from '../browser/navigator.js';
 import { isRetryablePlaywrightError } from '../utils/retry.js';
 import { logger } from '../utils/logger.js';
+import { urlCaso } from '../utils/astrea-urls.js';
 import type { Andamento } from '../models/index.js';
 import type { FiltrosAndamento, ServiceResponse, PaginationMeta } from '../types/index.js';
 
@@ -56,9 +57,11 @@ function toDateOnly(iso?: string): string {
 }
 
 function mapHistoricalToAndamento(h: RawHistorical): Andamento {
+  const processoId = String(h.caseId ?? '');
   return {
     id: String(h.id ?? ''),
-    processoId: String(h.caseId ?? ''),
+    processoId,
+    urlProcesso: processoId ? urlCaso(processoId) : undefined,
     data: toDateOnly(h.date),
     descricao: String(h.description ?? h.descriptionTranslation ?? ''),
     tipo: h.type ?? undefined,

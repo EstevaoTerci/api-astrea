@@ -10,6 +10,7 @@ import {
 import { navigateTo } from '../browser/navigator.js';
 import { buscarCaso } from './casos.service.js';
 import { logger } from '../utils/logger.js';
+import { urlCaso, urlContato } from '../utils/astrea-urls.js';
 import { isRetryablePlaywrightError } from '../utils/retry.js';
 import type {
   Atendimento,
@@ -148,14 +149,19 @@ function mapApiAtendimentoToAtendimento(a: ApiConsulting): Atendimento {
   const mainCustomer = a.customers?.find((customer) => customer.main) ?? a.customers?.[0];
   const lastMessage = a.messages?.[0];
 
+  const clienteId = mainCustomer?.id != null ? String(mainCustomer.id) : undefined;
+  const casoId = a.caseAttached?.id != null ? String(a.caseAttached.id) : undefined;
+
   return {
     id: String(a.id ?? ''),
     assunto: a.subject ?? '',
     status: a.active === false ? 'ENCERRADO' : 'EM ANDAMENTO',
-    clienteId: mainCustomer?.id != null ? String(mainCustomer.id) : undefined,
+    clienteId,
     clienteNome: mainCustomer?.name ?? undefined,
-    casoId: a.caseAttached?.id != null ? String(a.caseAttached.id) : undefined,
+    urlCliente: clienteId ? urlContato(clienteId) : undefined,
+    casoId,
     casoTitulo: a.caseAttached?.title ?? undefined,
+    urlCaso: casoId ? urlCaso(casoId) : undefined,
     responsavelId: a.responsibleId != null ? String(a.responsibleId) : undefined,
     responsavelNome: a.responsibleName ?? lastMessage?.authorName ?? undefined,
     dataHora: toIsoDate(a.createdDate ?? lastMessage?.createdDate),

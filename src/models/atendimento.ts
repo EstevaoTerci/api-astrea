@@ -5,8 +5,12 @@ export interface Atendimento {
   status: string;
   clienteId?: string;
   clienteNome?: string;
+  /** URL direta do cliente no app do Astrea (quando houver clienteId). */
+  urlCliente?: string;
   casoId?: string;
   casoTitulo?: string;
+  /** URL direta do caso/processo no app do Astrea (quando houver casoId). */
+  urlCaso?: string;
   responsavelId?: string;
   responsavelNome?: string;
   /** Data/hora do atendimento (ISO 8601). */

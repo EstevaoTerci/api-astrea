@@ -10,8 +10,12 @@ export interface Tarefa {
   responsavel?: string;
   clienteId?: string;
   clienteNome?: string;
+  /** URL direta do cliente no app do Astrea (quando houver clienteId). */
+  urlCliente?: string;
   casoId?: string;
   processoId?: string;
+  /** URL direta do caso/processo no app do Astrea (quando houver casoId). */
+  urlCaso?: string;
   listaId?: string;
   createdAt?: string;
 }

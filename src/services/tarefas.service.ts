@@ -7,6 +7,7 @@ import {
   WORKSPACE_PAGE_PATH,
 } from '../browser/astrea-http.js';
 import { logger } from '../utils/logger.js';
+import { urlCaso } from '../utils/astrea-urls.js';
 import { isRetryablePlaywrightError } from '../utils/retry.js';
 import type { Tarefa, CriarTarefaInput, AtualizarTarefaInput } from '../models/index.js';
 import type { FiltrosTarefa, ServiceResponse, PaginationMeta } from '../types/index.js';
@@ -55,6 +56,7 @@ function mapPriority(priority?: number): string | undefined {
 
 function mapGcpTaskToTarefa(task: GcpTask): Tarefa {
   const id = String(task.taskId ?? task.id ?? '');
+  const casoId = task.casoId ? String(task.casoId) : task.caseId ? String(task.caseId) : undefined;
   return {
     id,
     titulo: task.description ?? '',
@@ -63,7 +65,8 @@ function mapGcpTaskToTarefa(task: GcpTask): Tarefa {
     prazo: task.dueDate ?? undefined,
     responsavelId: task.responsibleId ? String(task.responsibleId) : undefined,
     responsavel: task.responsibleName ?? undefined,
-    casoId: task.casoId ? String(task.casoId) : task.caseId ? String(task.caseId) : undefined,
+    casoId,
+    urlCaso: casoId ? urlCaso(casoId) : undefined,
     listaId: task.currentListId ? String(task.currentListId) : undefined,
     createdAt: task.createDate ?? undefined,
   };

@@ -36,7 +36,7 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'listar_clientes',
-    'Lista clientes do escritório com filtros opcionais.',
+    'Lista clientes do escritório com filtros opcionais. Cada item inclui `url` com o link direto do contato no app do Astrea.',
     {
       nome: z.string().optional(),
       email: z.string().optional(),
@@ -59,7 +59,7 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'buscar_cliente',
-    'Busca um cliente por ID.',
+    'Busca um cliente por ID. Retorna `url` com o link direto do contato no app do Astrea.',
     {
       id: z.string(),
     },
@@ -78,7 +78,7 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'listar_todos_clientes',
-    'Lista todos os clientes (resumido, sem paginação).',
+    'Lista todos os clientes (resumido, sem paginação). Cada item inclui `url` com o link direto do contato no app do Astrea.',
     {},
     async () => {
       const result = await listarTodosClientes();
@@ -137,7 +137,7 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'buscar_caso',
-    'Busca um caso/processo por ID.',
+    'Busca um caso/processo por ID. Retorna `url` com o link direto do caso/processo no app do Astrea (e `urlCliente` quando houver cliente principal).',
     {
       id: z.string(),
     },
@@ -156,7 +156,7 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'buscar_casos_por_cliente',
-    'Lista casos de um cliente.',
+    'Lista casos de um cliente. Cada item inclui `url` com o link direto do caso/processo no app do Astrea.',
     {
       clienteId: z.string(),
     },
@@ -175,7 +175,7 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'listar_tarefas',
-    'Lista tarefas com filtros. Por padrão retorna apenas tarefas ativas (pendentes); passe incluirConcluidas=true para também trazer as concluídas (chamada extra ao Astrea). Use responsavelId para restringir ao escopo de tarefas de um usuário específico. Para filtrar por prazo, use dias (ex.: dias=7 para próximos 7 dias a partir de hoje) ou prazoInicio/prazoFim no formato YYYY-MM-DD.',
+    'Lista tarefas com filtros. Por padrão retorna apenas tarefas ativas (pendentes); passe incluirConcluidas=true para também trazer as concluídas (chamada extra ao Astrea). Use responsavelId para restringir ao escopo de tarefas de um usuário específico. Para filtrar por prazo, use dias (ex.: dias=7 para próximos 7 dias a partir de hoje) ou prazoInicio/prazoFim no formato YYYY-MM-DD. Cada item inclui `urlCaso` quando há caso/processo vinculado (link direto no app do Astrea).',
     {
       status: z.string().optional(),
       casoId: z.string().optional(),
@@ -252,7 +252,7 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'buscar_tarefas_por_processo',
-    'Lista tarefas associadas a um processo.',
+    'Lista tarefas associadas a um processo. Cada item inclui `urlCaso` com o link direto do caso/processo no app do Astrea.',
     {
       processoId: z.string(),
     },
@@ -271,7 +271,7 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'listar_andamentos',
-    'Lista os andamentos (histórico) de um processo específico. Aceita filtro por janela de data (dataInicio/dataFim em YYYY-MM-DD ou dias para últimos N dias), por tipo (ex.: APPOINTMENT, DONE_TASK), e por responsável (responsavelId para id exato, responsavel para substring do nome).',
+    'Lista os andamentos (histórico) de um processo específico. Aceita filtro por janela de data (dataInicio/dataFim em YYYY-MM-DD ou dias para últimos N dias), por tipo (ex.: APPOINTMENT, DONE_TASK), e por responsável (responsavelId para id exato, responsavel para substring do nome). Cada item inclui `urlProcesso` com o link direto do caso/processo no app do Astrea.',
     {
       processoId: z.string(),
       dataInicio: z.string().optional(),
@@ -299,7 +299,7 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'andamentos_recentes',
-    'Retorna andamentos recentes de todos os processos do escritório (default últimos 30 dias). Aceita filtros por janela de data (dias, dataInicio/dataFim), por tipo e por responsável (responsavelId ou responsavel).',
+    'Retorna andamentos recentes de todos os processos do escritório (default últimos 30 dias). Aceita filtros por janela de data (dias, dataInicio/dataFim), por tipo e por responsável (responsavelId ou responsavel). Cada item inclui `urlProcesso` com o link direto do caso/processo no app do Astrea.',
     {
       dias: z.number().optional(),
       dataInicio: z.string().optional(),
@@ -325,7 +325,7 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'listar_publicacoes',
-    'Lista publicações (clippings do DJE) do escritório. Filtros: dataInicio/dataFim (YYYY-MM-DD), dias (últimos N), lida (boolean), responsavel (busca por substring no nome do advogado monitorado cuja pesquisa capturou a publicação).',
+    'Lista publicações (clippings do DJE) do escritório. Filtros: dataInicio/dataFim (YYYY-MM-DD), dias (últimos N), lida (boolean), responsavel (busca por substring no nome do advogado monitorado cuja pesquisa capturou a publicação). Cada item inclui `urlCaso` quando há caso/processo vinculado (link direto no app do Astrea).',
     {
       dataInicio: z.string().optional(),
       dataFim: z.string().optional(),
@@ -350,7 +350,7 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'listar_atendimentos',
-    'Lista atendimentos com filtros.',
+    'Lista atendimentos com filtros. Cada item inclui `urlCliente` e `urlCaso` (quando vinculados) com links diretos no app do Astrea.',
     {
       clienteId: z.string().optional(),
       casoId: z.string().optional(),

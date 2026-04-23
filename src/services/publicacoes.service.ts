@@ -8,6 +8,7 @@ import {
 import { navigateTo } from '../browser/navigator.js';
 import { isRetryablePlaywrightError } from '../utils/retry.js';
 import { logger } from '../utils/logger.js';
+import { urlCaso } from '../utils/astrea-urls.js';
 import type { Publicacao } from '../models/index.js';
 import type { FiltrosPublicacao, ServiceResponse, PaginationMeta } from '../types/index.js';
 
@@ -81,9 +82,12 @@ function mapClippingToPublicacao(c: RawClipping): Publicacao {
         : undefined;
   const responsavel = c.caseResponsibleName ?? c.responsibleName ?? c.clippingSearchName;
 
+  const casoId = c.caseId != null ? String(c.caseId) : undefined;
   return {
     id,
     processoNumero,
+    casoId,
+    urlCaso: casoId ? urlCaso(casoId) : undefined,
     tribunal,
     data,
     conteudo,

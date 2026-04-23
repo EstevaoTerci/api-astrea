@@ -3,6 +3,8 @@ import type { DocumentoContato } from './contato.js';
 export interface Cliente {
   id: string;
   nome: string;
+  /** URL direta do contato no app do Astrea (https://astrea.net.br/#/main/contacts/detail/{id}/data). */
+  url?: string;
   cpfCnpj?: string;
   email?: string;
   telefone?: string;
@@ -25,6 +27,8 @@ export interface Cliente {
 export interface ClienteResumido {
   id: string;
   nome: string;
+  /** URL direta do contato no app do Astrea. */
+  url?: string;
   classificacao?: string;
   tipo?: 'pessoa_fisica' | 'pessoa_juridica';
   telefone?: string;
