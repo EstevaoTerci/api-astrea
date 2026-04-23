@@ -36,7 +36,7 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'listar_clientes',
-    'Lista clientes do escritório com filtros opcionais. Cada item inclui `url` com o link direto do contato no app do Astrea.',
+    'Lista clientes do escritório com filtros opcionais. O filtro `cpfCnpj` aceita com ou sem máscara (comparação feita pelos dígitos). Cada item inclui `url` com o link direto do contato no app do Astrea.',
     {
       nome: z.string().optional(),
       email: z.string().optional(),

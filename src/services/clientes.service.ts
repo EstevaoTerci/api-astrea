@@ -423,10 +423,16 @@ export async function listarClientes(
       const pagina = filtros?.pagina ?? 1;
       const limite = filtros?.limite ?? 50;
 
+      const cpfDigits = filtros?.cpfCnpj ? filtros.cpfCnpj.replace(/\D/g, '') : '';
+      // O queryDTO.text da API /contact/all é o único vetor de busca server-side:
+      // casa tanto nome quanto documento. Preferir nome; usar cpfCnpj normalizado
+      // se nome estiver ausente.
+      const searchText = filtros?.nome?.trim() || cpfDigits || '';
+
       const response = await astreaApiPost<AstreaContactListResponse>(
         page,
         `${ASTREA_API}/contact/all`,
-        buildSearchPayload(filtros?.nome ?? '', pagina - 1, limite),
+        buildSearchPayload(searchText, pagina - 1, limite),
       );
 
       let contacts = response.contacts ?? [];
@@ -443,9 +449,11 @@ export async function listarClientes(
         );
       }
 
-      // Enriquecer com detalhes (urlDrive, cpfCnpj, endereco, etc.) para buscas por nome
+      // Enriquecer com /details quando o usuário pediu nome ou cpfCnpj. O cpf não
+      // está no AstreaContactListItem (só no details), então o enrichment é
+      // obrigatório para filtrar pelo documento abaixo.
       const MAX_ENRICH = 20;
-      const shouldEnrich = !!filtros?.nome;
+      const shouldEnrich = !!filtros?.nome || !!cpfDigits;
       const toEnrich = shouldEnrich ? contacts.slice(0, MAX_ENRICH) : [];
 
       let clientes: Cliente[];
@@ -479,6 +487,15 @@ export async function listarClientes(
         }
       } else {
         clientes = contacts.map(mapContactListItem);
+      }
+
+      // Filtro local por cpfCnpj: a busca text da API é substring e pode casar o
+      // documento como parte do nome, telefone, etc. Garantir match exato nos dígitos.
+      if (cpfDigits) {
+        clientes = clientes.filter((c) => {
+          const candidatos = c.cpfCnpj ? c.cpfCnpj.replace(/\D/g, '') : '';
+          return candidatos.includes(cpfDigits);
+        });
       }
 
       const meta: PaginationMeta = {
@@ -650,6 +667,22 @@ interface AstreaDocumentScope {
   } | null;
 }
 
+/**
+ * Procura a pasta Drive dentro da lista de documentos do contato.
+ * Regra: documento tipo DTE_DRIVE, ou URL que aponta para uma pasta do Drive.
+ * Usado como fallback para `Cliente.urlDrive` quando o campo "Site" do
+ * cadastro não foi preenchido.
+ */
+function findUrlPastaDriveNosDocumentos(documentos: DocumentoContato[]): string | undefined {
+  for (const doc of documentos) {
+    if (!doc.url) continue;
+    if (doc.tipo === 'DTE_DRIVE' || /drive\.google\.com\/drive\/folders/i.test(doc.url)) {
+      return doc.url;
+    }
+  }
+  return undefined;
+}
+
 function mapDocumentScope(d: AstreaDocumentScope): DocumentoContato {
   return {
     id: String(d.id),
@@ -808,6 +841,12 @@ export async function buscarCliente(idOrNomeCpf: string): Promise<ServiceRespons
 
       // Buscar documentos do contato via scraping do scope AngularJS
       cliente.documentos = await buscarDocumentosContato(page, contactId);
+
+      // Fallback: se o campo "Site" do cadastro não tem a pasta Drive, tentar
+      // derivar da lista de documentos (tipo DTE_DRIVE ou URL com /drive/folders/).
+      if (!cliente.urlDrive && cliente.documentos?.length) {
+        cliente.urlDrive = findUrlPastaDriveNosDocumentos(cliente.documentos);
+      }
 
       return cliente;
     });
