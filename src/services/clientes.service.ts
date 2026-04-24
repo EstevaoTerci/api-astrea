@@ -697,11 +697,31 @@ export async function mesclarClientes(
       // Aguardar o form renderizar (botão Salvar aparece quando o scope está pronto)
       await page.waitForSelector('button[ng-click="save(myForm.$invalid)"]', { timeout: 20_000 });
 
-      // Ler o payload consolidado do scope. Sanity check: id deve ser o principal.
-      const payload = await page.evaluate((expectedId) => {
-        const saveBtn = document.querySelector(
-          'button[ng-click="save(myForm.$invalid)"]',
-        ) as HTMLElement | null;
+      // Aguardar o scope.contact ser populado. O botão Salvar aparece antes de
+      // POST /contact/ids voltar, então precisamos esperar scope.contact.id e
+      // scope.isMerge estarem prontos.
+      await page.waitForFunction(
+        (expectedId: string) => {
+          const btn = document.querySelector('button[ng-click="save(myForm.$invalid)"]');
+          if (!btn) return false;
+          const ng = (window as unknown as { angular?: { element: (el: Element) => { scope: () => unknown } } }).angular;
+          if (!ng) return false;
+          const scope = ng.element(btn).scope() as { contact?: { id?: number | string; name?: string }; isMerge?: boolean } | undefined;
+          return !!(
+            scope &&
+            scope.isMerge === true &&
+            scope.contact &&
+            scope.contact.name &&
+            String(scope.contact.id) === expectedId
+          );
+        },
+        idPrincipal,
+        { timeout: 20_000 },
+      );
+
+      // Ler o payload consolidado do scope.
+      const payload = await page.evaluate((expectedId: string) => {
+        const saveBtn = document.querySelector('button[ng-click="save(myForm.$invalid)"]');
         if (!saveBtn) throw new Error('FORM_UNAVAILABLE: botão Salvar não encontrado');
 
         const ng = (window as unknown as { angular: { element: (el: Element) => { scope: () => { contact?: Record<string, unknown>; isMerge?: boolean } } } }).angular;
@@ -717,6 +737,11 @@ export async function mesclarClientes(
         }
         return contact;
       }, idPrincipal);
+
+      logger.debug(
+        { idPrincipal, payloadKeys: Object.keys(payload), name: (payload as { name?: string }).name },
+        'Payload de /contact/merge pronto',
+      );
 
       const response = await astreaApiPost<AstreaSaveContactResponse>(
         page,
