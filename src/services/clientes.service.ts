@@ -719,17 +719,24 @@ export async function mesclarClientes(
         { timeout: 20_000 },
       );
 
-      // Ler o payload consolidado do scope.
+      // Ler o payload consolidado do scope. Usar angular.toJson em vez de
+      // JSON.stringify — ele remove campos internos do Angular ($$hashKey etc),
+      // que o backend do Astrea rejeita.
       const payload = await page.evaluate((expectedId: string) => {
         const saveBtn = document.querySelector('button[ng-click="save(myForm.$invalid)"]');
         if (!saveBtn) throw new Error('FORM_UNAVAILABLE: botão Salvar não encontrado');
 
-        const ng = (window as unknown as { angular: { element: (el: Element) => { scope: () => { contact?: Record<string, unknown>; isMerge?: boolean } } } }).angular;
+        const ng = (window as unknown as {
+          angular: {
+            element: (el: Element) => { scope: () => { contact?: Record<string, unknown>; isMerge?: boolean } };
+            toJson: (obj: unknown) => string;
+          };
+        }).angular;
         const scope = ng.element(saveBtn).scope();
         if (!scope?.contact) throw new Error('FORM_UNAVAILABLE: scope.contact não encontrado');
         if (!scope.isMerge) throw new Error('FORM_UNAVAILABLE: scope não está em modo merge');
 
-        const contact = JSON.parse(JSON.stringify(scope.contact)) as Record<string, unknown>;
+        const contact = JSON.parse(ng.toJson(scope.contact)) as Record<string, unknown>;
         if (String(contact.id) !== expectedId) {
           throw new Error(
             `FORM_UNAVAILABLE: master selecionado (${contact.id}) difere do idPrincipal (${expectedId})`,
