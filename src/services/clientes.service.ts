@@ -690,12 +690,42 @@ export async function mesclarClientes(
       //
       // Formato da URL: /add-edit-merge/[,,true,[ID_PRINCIPAL,ID_SLAVE...],]/personal
       // O primeiro ID da lista vira o master selecionado no dropdown por default.
-      const idsSegment = `[,,true,[${todosIds.join(',')}],]`;
-      const mergePath = `/#/main/contacts/add-edit-merge/${encodeURIComponent(idsSegment)}/personal`;
-      await navigateTo(page, mergePath);
+      // Primeiro garante que o app AngularJS está carregado e pronto — sem
+      // isso, uma navegação direta para a rota de merge pode não ativar o
+      // roteador e o form nunca renderiza.
+      await navigateTo(page, ANGULAR_PAGE_PATH);
+      await page.waitForFunction(
+        () => !!(window as unknown as { angular?: unknown }).angular,
+        null,
+        { timeout: 20_000 },
+      );
+
+      // Agora navega para a rota de unificação via $state.go (UI-Router).
+      // State: main.contacts-add-edit-merge.personal
+      // Params: contactId, name, merge, ids (array), fromFolder
+      //   → merge=true + ids=[...] é o que ativa o modo "Unificar contatos"
+      await page.evaluate((ids: number[]) => {
+        const ng = (window as unknown as {
+          angular: {
+            element: (el: Element) => {
+              injector: () => {
+                get: (name: string) => { go: (state: string, params: Record<string, unknown>) => unknown };
+              };
+            };
+          };
+        }).angular;
+        const $state = ng.element(document.body).injector().get('$state');
+        $state.go('main.contacts-add-edit-merge.personal', {
+          contactId: '',
+          name: '',
+          merge: true,
+          ids,
+          fromFolder: '',
+        });
+      }, todosIds);
 
       // Aguardar o form renderizar (botão Salvar aparece quando o scope está pronto)
-      await page.waitForSelector('button[ng-click="save(myForm.$invalid)"]', { timeout: 20_000 });
+      await page.waitForSelector('button[ng-click="save(myForm.$invalid)"]', { timeout: 25_000 });
 
       // Aguardar o scope.contact ser populado. O botão Salvar aparece antes de
       // POST /contact/ids voltar, então precisamos esperar scope.contact.id e
