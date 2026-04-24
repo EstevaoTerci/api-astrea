@@ -775,6 +775,11 @@ export async function mesclarClientes(
         return contact;
       }, idPrincipal);
 
+      // originContactIds = IDs dos contatos que serão absorvidos (slaves).
+      // Campo exigido pelo backend do Astrea mas ausente no scope.contact —
+      // a UI deve adicionar via interceptor do $resource antes de enviar.
+      payload.originContactIds = idsMesclados.map((id) => Number(id));
+
       logger.info(
         { idPrincipal, payload },
         'Payload de /contact/merge pronto (DEBUG TEMPORÁRIO)',
