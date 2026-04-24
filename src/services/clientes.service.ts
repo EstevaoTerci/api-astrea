@@ -815,9 +815,9 @@ export async function mesclarClientes(
         userId,
       };
 
-      logger.info(
-        { idPrincipal, idsMesclados, userId, mergeBody },
-        'Payload de /contact/merge pronto (DEBUG TEMPORÁRIO)',
+      logger.debug(
+        { idPrincipal, idsMesclados, userId },
+        'Enviando /contact/merge',
       );
 
       // Chamamos $http diretamente (em vez de astreaApiPost) para capturar o
