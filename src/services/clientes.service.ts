@@ -775,15 +775,48 @@ export async function mesclarClientes(
         return contact;
       }, idPrincipal);
 
-      // Estrutura esperada pelo /contact/merge:
-      //   { originContactIds: [slaves...], destinationContact: {...master} }
+      // Descobrir o userId do usuário logado. O Astrea não expõe endpoint
+      // "current user" — pegar do localStorage (Hotjar grava em _hjUserAttributes
+      // como base64 JSON {userId, ...}). Fallback: regex em chaves tipo
+      // "case_suggestions_for_user_<ID>_...".
+      const userId = await page.evaluate(() => {
+        try {
+          const raw = localStorage.getItem('_hjUserAttributes');
+          if (raw) {
+            const decoded = JSON.parse(atob(raw)) as { userId?: string };
+            if (decoded.userId) return String(decoded.userId);
+          }
+        } catch {
+          // ignore
+        }
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i) || '';
+          const m = key.match(/_user_(\d{10,})(?:_|$)/);
+          if (m) return m[1];
+        }
+        return null;
+      });
+
+      if (!userId) {
+        throw new Error('API_ERROR: não foi possível obter o userId do usuário logado');
+      }
+
+      // Estrutura REAL esperada pelo POST /contact/merge:
+      //   {
+      //     destinationContact: {...master completo},
+      //     destinationContactId: <masterId>,
+      //     originContactIds: [masterId, ...slavesIds]  (inclui o próprio master!),
+      //     userId: "<userId do usuário logado>"
+      //   }
       const mergeBody = {
-        originContactIds: idsMesclados.map((id) => Number(id)),
         destinationContact: payload,
+        destinationContactId: Number(idPrincipal),
+        originContactIds: [Number(idPrincipal), ...idsMesclados.map((id) => Number(id))],
+        userId,
       };
 
       logger.info(
-        { idPrincipal, mergeBody },
+        { idPrincipal, idsMesclados, userId, mergeBody },
         'Payload de /contact/merge pronto (DEBUG TEMPORÁRIO)',
       );
 
