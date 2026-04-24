@@ -775,13 +775,15 @@ export async function mesclarClientes(
         return contact;
       }, idPrincipal);
 
-      // originContactIds = IDs dos contatos que serão absorvidos (slaves).
-      // Campo exigido pelo backend do Astrea mas ausente no scope.contact —
-      // a UI deve adicionar via interceptor do $resource antes de enviar.
-      payload.originContactIds = idsMesclados.map((id) => Number(id));
+      // Estrutura esperada pelo /contact/merge:
+      //   { originContactIds: [slaves...], destinationContact: {...master} }
+      const mergeBody = {
+        originContactIds: idsMesclados.map((id) => Number(id)),
+        destinationContact: payload,
+      };
 
       logger.info(
-        { idPrincipal, payload },
+        { idPrincipal, mergeBody },
         'Payload de /contact/merge pronto (DEBUG TEMPORÁRIO)',
       );
 
@@ -807,7 +809,7 @@ export async function mesclarClientes(
                 }),
               );
           }),
-        [`${ASTREA_API}/contact/merge`, payload] as [string, Record<string, unknown>],
+        [`${ASTREA_API}/contact/merge`, mergeBody] as [string, Record<string, unknown>],
       )) as { ok: boolean; status?: number; statusText?: string; data?: unknown };
 
       if (!merged.ok) {
