@@ -775,16 +775,47 @@ export async function mesclarClientes(
         return contact;
       }, idPrincipal);
 
-      logger.debug(
-        { idPrincipal, payloadKeys: Object.keys(payload), name: (payload as { name?: string }).name },
-        'Payload de /contact/merge pronto',
+      logger.info(
+        { idPrincipal, payload },
+        'Payload de /contact/merge pronto (DEBUG TEMPORÁRIO)',
       );
 
-      const response = await astreaApiPost<AstreaSaveContactResponse>(
-        page,
-        `${ASTREA_API}/contact/merge`,
-        payload,
-      );
+      // Chamamos $http diretamente (em vez de astreaApiPost) para capturar o
+      // body de erro do backend — astreaApiPost descarta detalhes do 400.
+      const merged = (await page.evaluate(
+        ([apiUrl, body]) =>
+          new Promise((resolve) => {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const http = (window as any).angular.element(document.body).injector().get('$http');
+            http
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              .post(apiUrl, body)
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              .then((r: any) => resolve({ ok: true, status: r.status, data: r.data }))
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              .catch((err: any) =>
+                resolve({
+                  ok: false,
+                  status: err?.status,
+                  statusText: err?.statusText,
+                  data: err?.data,
+                }),
+              );
+          }),
+        [`${ASTREA_API}/contact/merge`, payload] as [string, Record<string, unknown>],
+      )) as { ok: boolean; status?: number; statusText?: string; data?: unknown };
+
+      if (!merged.ok) {
+        logger.error(
+          { idPrincipal, status: merged.status, statusText: merged.statusText, data: merged.data, payload },
+          'Astrea rejeitou /contact/merge',
+        );
+        throw new Error(
+          `API_ERROR: Astrea retornou ${merged.status} ${merged.statusText || ''} — ${JSON.stringify(merged.data)}`,
+        );
+      }
+
+      const response = merged.data as AstreaSaveContactResponse;
 
       if (response.response === 'NOT_OK') {
         throw new Error(
