@@ -615,6 +615,120 @@ export async function listarTodosClientes(): Promise<ServiceResponse<ClienteResu
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Service: Mesclar (Unificar) Contatos
+//
+// POST /api/clientes/mesclar
+//
+// Fluxo capturado da UI do Astrea (via chrome-devtools em 2026-04-23):
+//  1. POST /api/v2/contact/ids com [idPrincipal, ...idsMesclados]
+//     → retorna array de contatos (o servidor "prepara" o merge)
+//  2. POST /api/v2/contact/merge com o objeto completo do contato principal
+//     → servidor unifica usando o state da chamada anterior
+//
+// Ação IRREVERSÍVEL: os contatos em `idsMesclados` deixam de existir, e todos
+// os dados (casos, telefones, emails, endereços, etc.) são incorporados no
+// contato principal. Campos únicos (CPF, RG, nome) mantêm os do principal.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface MesclarClientesInput {
+  idPrincipal: string;
+  idsMesclados: string[];
+}
+
+export async function mesclarClientes(
+  input: MesclarClientesInput,
+): Promise<ServiceResponse<Cliente>> {
+  try {
+    const idPrincipal = input.idPrincipal?.trim();
+    const idsMesclados = input.idsMesclados.map((id) => id.trim()).filter(Boolean);
+
+    if (!idPrincipal) {
+      return {
+        ok: false,
+        error: {
+          message: 'idPrincipal é obrigatório',
+          code: 'VALIDATION_ERROR',
+          retryable: false,
+        },
+      };
+    }
+    if (idsMesclados.length === 0) {
+      return {
+        ok: false,
+        error: {
+          message: 'idsMesclados deve conter ao menos um ID',
+          code: 'VALIDATION_ERROR',
+          retryable: false,
+        },
+      };
+    }
+    if (idsMesclados.includes(idPrincipal)) {
+      return {
+        ok: false,
+        error: {
+          message: 'idsMesclados não pode incluir o idPrincipal',
+          code: 'VALIDATION_ERROR',
+          retryable: false,
+        },
+      };
+    }
+
+    await withBrowserContext(async (page) => {
+      await navigateTo(page, ANGULAR_PAGE_PATH);
+
+      const todosIds = [idPrincipal, ...idsMesclados].map((id) => {
+        const n = Number(id);
+        if (!Number.isFinite(n)) {
+          throw new Error(`VALIDATION_ERROR: ID inválido "${id}"`);
+        }
+        return n;
+      });
+
+      const contatos = await astreaApiPost<AstreaContactDetails[]>(
+        page,
+        `${ASTREA_API}/contact/ids`,
+        todosIds,
+      );
+
+      const principal = contatos.find((c) => String(c.id) === idPrincipal);
+      if (!principal) {
+        throw new Error(`NOT_FOUND: Contato principal ${idPrincipal} não encontrado`);
+      }
+
+      const response = await astreaApiPost<AstreaSaveContactResponse>(
+        page,
+        `${ASTREA_API}/contact/merge`,
+        principal,
+      );
+
+      if (response.response === 'NOT_OK') {
+        throw new Error(
+          `API_ERROR: ${response.errorMessage || 'Astrea retornou NOT_OK ao mesclar contatos'}`,
+        );
+      }
+    });
+
+    return await buscarCliente(idPrincipal);
+  } catch (err) {
+    logger.error({ err, input }, 'Erro em mesclarClientes');
+    const msg = err instanceof Error ? err.message : 'Erro desconhecido';
+    const code = msg.startsWith('VALIDATION_ERROR')
+      ? 'VALIDATION_ERROR'
+      : msg.startsWith('NOT_FOUND')
+        ? 'NOT_FOUND'
+        : 'API_ERROR';
+    return {
+      ok: false,
+      error: {
+        message: msg.replace(/^(VALIDATION_ERROR|NOT_FOUND|API_ERROR):\s*/, ''),
+        code,
+        retryable: isRetryablePlaywrightError(err),
+      },
+    };
+  }
+}
+
 export async function criarCliente(input: CriarClienteInput): Promise<ServiceResponse<Cliente>> {
   try {
     const contactId = await withBrowserContext(async (page) => {

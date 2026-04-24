@@ -5,6 +5,7 @@ import {
   criarCliente,
   listarClientes,
   listarTodosClientes,
+  mesclarClientes,
 } from '../services/clientes.service.js';
 import { buscarCasosPorCliente } from '../services/casos.service.js';
 import { adicionarDocumentoLink } from '../services/documentos.service.js';
@@ -106,6 +107,46 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
 
     const response: ApiResponse<typeof result.data> = { success: true, data: result.data };
     res.status(201).json(response);
+  } catch (err) {
+    next(err);
+  }
+});
+
+const mesclarClientesSchema = z.object({
+  idPrincipal: z.string().min(1),
+  idsMesclados: z.array(z.string().min(1)).min(1),
+});
+
+/**
+ * POST /api/clientes/mesclar
+ * Unifica dois ou mais contatos no contato principal.
+ * Ação IRREVERSÍVEL: os contatos em `idsMesclados` deixam de existir.
+ */
+router.post('/mesclar', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const body = mesclarClientesSchema.parse(req.body);
+    const result = await mesclarClientes(body);
+
+    if (!result.ok) {
+      const error: ApiError = {
+        success: false,
+        error: result.error.message,
+        code: result.error.code,
+      };
+      const status =
+        result.error.code === 'VALIDATION_ERROR'
+          ? 400
+          : result.error.code === 'NOT_FOUND'
+            ? 404
+            : result.error.code === 'BROWSER_UNAVAILABLE'
+              ? 503
+              : 500;
+      res.status(status).json(error);
+      return;
+    }
+
+    const response: ApiResponse<typeof result.data> = { success: true, data: result.data };
+    res.json(response);
   } catch (err) {
     next(err);
   }
