@@ -675,8 +675,6 @@ export async function mesclarClientes(
     }
 
     await withBrowserContext(async (page) => {
-      await navigateTo(page, ANGULAR_PAGE_PATH);
-
       const todosIds = [idPrincipal, ...idsMesclados].map((id) => {
         const n = Number(id);
         if (!Number.isFinite(n)) {
@@ -685,21 +683,45 @@ export async function mesclarClientes(
         return n;
       });
 
-      const contatos = await astreaApiPost<AstreaContactDetails[]>(
-        page,
-        `${ASTREA_API}/contact/ids`,
-        todosIds,
-      );
+      // Navegar para a URL do form de unificação — a SPA do Astrea faz o
+      // POST /contact/ids e monta o scope.contact consolidado (merge dos
+      // dados dos 2+ contatos, com campos no formato exato que /contact/merge
+      // aceita — birthYear/Day/Month como number, countryName no endereço etc).
+      //
+      // Formato da URL: /add-edit-merge/[,,true,[ID_PRINCIPAL,ID_SLAVE...],]/personal
+      // O primeiro ID da lista vira o master selecionado no dropdown por default.
+      const idsSegment = `[,,true,[${todosIds.join(',')}],]`;
+      const mergePath = `/#/main/contacts/add-edit-merge/${encodeURIComponent(idsSegment)}/personal`;
+      await navigateTo(page, mergePath);
 
-      const principal = contatos.find((c) => String(c.id) === idPrincipal);
-      if (!principal) {
-        throw new Error(`NOT_FOUND: Contato principal ${idPrincipal} não encontrado`);
-      }
+      // Aguardar o form renderizar (botão Salvar aparece quando o scope está pronto)
+      await page.waitForSelector('button[ng-click="save(myForm.$invalid)"]', { timeout: 20_000 });
+
+      // Ler o payload consolidado do scope. Sanity check: id deve ser o principal.
+      const payload = await page.evaluate((expectedId) => {
+        const saveBtn = document.querySelector(
+          'button[ng-click="save(myForm.$invalid)"]',
+        ) as HTMLElement | null;
+        if (!saveBtn) throw new Error('FORM_UNAVAILABLE: botão Salvar não encontrado');
+
+        const ng = (window as unknown as { angular: { element: (el: Element) => { scope: () => { contact?: Record<string, unknown>; isMerge?: boolean } } } }).angular;
+        const scope = ng.element(saveBtn).scope();
+        if (!scope?.contact) throw new Error('FORM_UNAVAILABLE: scope.contact não encontrado');
+        if (!scope.isMerge) throw new Error('FORM_UNAVAILABLE: scope não está em modo merge');
+
+        const contact = JSON.parse(JSON.stringify(scope.contact)) as Record<string, unknown>;
+        if (String(contact.id) !== expectedId) {
+          throw new Error(
+            `FORM_UNAVAILABLE: master selecionado (${contact.id}) difere do idPrincipal (${expectedId})`,
+          );
+        }
+        return contact;
+      }, idPrincipal);
 
       const response = await astreaApiPost<AstreaSaveContactResponse>(
         page,
         `${ASTREA_API}/contact/merge`,
-        principal,
+        payload,
       );
 
       if (response.response === 'NOT_OK') {
