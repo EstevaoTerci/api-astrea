@@ -2,6 +2,8 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { listarTarefas, buscarTarefasPorProcesso, criarTarefa, atualizarTarefa } from '../services/tarefas.service.js';
 import type { ApiResponse, ApiError } from '../types/index.js';
+import { withBrowserContext, gapiCall, WORKSPACE_PAGE_PATH } from '../browser/astrea-http.js';
+import { navigateTo } from '../browser/navigator.js';
 
 const router = Router();
 
@@ -118,6 +120,25 @@ router.patch('/:id', async (req: Request, res: Response, next: NextFunction) => 
     res.status(200).json(response);
   } catch (err) {
     next(err);
+  }
+});
+
+/** TEMP DEBUG: POST /api/tarefas/_debug/gapi — { service, method, params?, body? } */
+router.post('/_debug/gapi', async (req: Request, res: Response) => {
+  try {
+    const { service, method, params, body } = req.body as {
+      service: string;
+      method: string;
+      params?: Record<string, unknown>;
+      body?: unknown;
+    };
+    const result = await withBrowserContext(async (page) => {
+      await navigateTo(page, WORKSPACE_PAGE_PATH);
+      return await gapiCall<unknown>(page, service, method, params ?? {}, body);
+    });
+    res.json({ success: true, result });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err instanceof Error ? err.message : String(err) });
   }
 });
 
