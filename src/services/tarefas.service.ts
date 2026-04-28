@@ -345,35 +345,25 @@ export async function atualizarTarefa(
 
       const userId = await getAstreaUserId(page);
 
-      // DEBUG: listar métodos disponíveis em taskListService
-      const methods = await page.evaluate(() => {
-        const svc = (window as any).gapi?.client?.workspace?.taskListService;
-        if (!svc) return null;
-        return Object.keys(svc).filter((k) => typeof svc[k] === 'function');
-      });
-      logger.info({ methods }, 'DEBUG taskListService methods');
-
-      // Busca dados atuais da tarefa
+      // Busca dados atuais com version (necessária pro saveTaskWithList atualizar
+      // em vez de inserir; loadEditTask não devolve version, getTaskWithComments sim).
       const current = await gapiCall<any>(
         page,
         'workspace.taskListService',
-        'loadEditTask',
-        {},
+        'getTaskWithComments',
         { taskId: id, userId: String(userId) },
       );
-      logger.info({ taskId: id, current }, 'DEBUG loadEditTask response');
 
-      const currentListId = current?.currentListId ?? current?.idCurrentTaskList ?? '';
-      const currentResponsibleId =
-        current?.responsibleId ?? current?.taskInfoDTO?.responsibleId ?? userId;
-      const currentOwnerId = current?.ownerId ?? current?.taskInfoDTO?.ownerId ?? userId;
-      const currentCreateDate =
-        current?.createDate ?? current?.taskInfoDTO?.createDate ?? new Date().toISOString();
-      const currentCaseId =
-        current?.caseId ??
-        current?.casoId ??
-        current?.taskInfoDTO?.caseId ??
-        current?.taskInfoDTO?.casoId;
+      if (current?.version === undefined || current?.version === null) {
+        throw new Error(`API_ERROR: tarefa ${id} sem version no response do backend`);
+      }
+
+      const currentListId =
+        current?.currentTaskList ?? current?.currentListId ?? current?.idCurrentTaskList ?? '';
+      const currentResponsibleId = current?.responsibleId ?? userId;
+      const currentOwnerId = current?.ownerId ?? userId;
+      const currentCreateDate = current?.createDate ?? new Date().toISOString();
+      const currentCaseId = current?.caseId ?? current?.casoId;
 
       // Determinar done a partir do status solicitado
       let done: boolean = current?.done ?? false;
@@ -384,12 +374,15 @@ export async function atualizarTarefa(
 
       const updatedPayload = {
         taskInfoDTO: {
+          // id + version são o que faz o backend reconhecer como update.
+          // Enviar 'taskId' em vez de 'id' faz o save virar insert (cria duplicata).
+          id,
+          version: current.version,
           description: input.titulo ?? current?.description ?? '',
           responsibleId: String(input.responsavelId ?? currentResponsibleId),
           createDate: currentCreateDate,
           ownerId: String(currentOwnerId),
           done,
-          taskId: id,
           priority: input.prioridade !== undefined ? input.prioridade : (current?.priority ?? 0),
           ...(input.prazo !== undefined
             ? { dueDate: input.prazo }
@@ -407,7 +400,6 @@ export async function atualizarTarefa(
         responsibleId: String(input.responsavelId ?? currentResponsibleId),
       };
 
-      logger.info({ taskId: id, updatedPayload }, 'DEBUG saveTaskWithList payload');
       const res = await gapiCall<any>(
         page,
         'workspace.taskListService',
@@ -415,7 +407,6 @@ export async function atualizarTarefa(
         {},
         updatedPayload,
       );
-      logger.info({ taskId: id, res }, 'DEBUG saveTaskWithList response');
 
       const updatedTask: GcpTask = {
         taskId: id,
