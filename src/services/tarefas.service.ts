@@ -345,6 +345,14 @@ export async function atualizarTarefa(
 
       const userId = await getAstreaUserId(page);
 
+      // DEBUG: listar métodos disponíveis em taskListService
+      const methods = await page.evaluate(() => {
+        const svc = (window as any).gapi?.client?.workspace?.taskListService;
+        if (!svc) return null;
+        return Object.keys(svc).filter((k) => typeof svc[k] === 'function');
+      });
+      logger.info({ methods }, 'DEBUG taskListService methods');
+
       // Busca dados atuais da tarefa
       const current = await gapiCall<any>(
         page,
