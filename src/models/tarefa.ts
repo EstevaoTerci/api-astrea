@@ -23,7 +23,7 @@ export interface Tarefa {
 export interface CriarTarefaInput {
   /** Conteudo da tarefa (mapeado para description na API GCP). */
   titulo: string;
-  /** ID do caso/processo associado (casoId no TaskInfoDTO). */
+  /** ID do caso/processo associado (caseId no TaskInfoDTO do Astrea). */
   casoId?: string;
   /** ID do usuario responsavel. Obrigatorio para criacao via GCP Endpoints. */
   responsavelId: string;

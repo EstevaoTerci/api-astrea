@@ -284,7 +284,7 @@ export async function criarTarefa(input: CriarTarefaInput): Promise<ServiceRespo
           ownerId: String(userId),
           ...(input.prazo ? { dueDate: input.prazo } : {}),
           ...(input.prioridade !== undefined ? { priority: input.prioridade } : {}),
-          ...(input.casoId ? { casoId: input.casoId } : {}),
+          ...(input.casoId ? { caseId: input.casoId } : {}),
         },
         idCurrentTaskList: listId,
         idUser: String(userId),
@@ -360,11 +360,18 @@ export async function atualizarTarefa(
       const currentOwnerId = current?.ownerId ?? current?.taskInfoDTO?.ownerId ?? userId;
       const currentCreateDate =
         current?.createDate ?? current?.taskInfoDTO?.createDate ?? new Date().toISOString();
+      const currentCaseId =
+        current?.caseId ??
+        current?.casoId ??
+        current?.taskInfoDTO?.caseId ??
+        current?.taskInfoDTO?.casoId;
 
       // Determinar done a partir do status solicitado
       let done: boolean = current?.done ?? false;
       if (input.status === 'concluida') done = true;
       else if (input.status === 'pendente') done = false;
+
+      const overrideCasoId = (input as { casoId?: string }).casoId;
 
       const updatedPayload = {
         taskInfoDTO: {
@@ -379,6 +386,11 @@ export async function atualizarTarefa(
             ? { dueDate: input.prazo }
             : current?.dueDate
               ? { dueDate: current.dueDate }
+              : {}),
+          ...(overrideCasoId
+            ? { caseId: overrideCasoId }
+            : currentCaseId
+              ? { caseId: currentCaseId }
               : {}),
         },
         idCurrentTaskList: String(currentListId),
@@ -404,7 +416,7 @@ export async function atualizarTarefa(
         createDate: currentCreateDate,
         currentListId: String(currentListId),
         priority: input.prioridade !== undefined ? input.prioridade : (current?.priority ?? 0),
-        casoId: current?.casoId,
+        caseId: overrideCasoId ?? (currentCaseId ? String(currentCaseId) : undefined),
         ...(res && typeof res === 'object' ? res : {}),
       };
 
