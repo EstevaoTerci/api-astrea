@@ -353,6 +353,7 @@ export async function atualizarTarefa(
         {},
         { taskId: id, userId: String(userId) },
       );
+      logger.info({ taskId: id, current }, 'DEBUG loadEditTask response');
 
       const currentListId = current?.currentListId ?? current?.idCurrentTaskList ?? '';
       const currentResponsibleId =
@@ -398,6 +399,7 @@ export async function atualizarTarefa(
         responsibleId: String(input.responsavelId ?? currentResponsibleId),
       };
 
+      logger.info({ taskId: id, updatedPayload }, 'DEBUG saveTaskWithList payload');
       const res = await gapiCall<any>(
         page,
         'workspace.taskListService',
@@ -405,6 +407,7 @@ export async function atualizarTarefa(
         {},
         updatedPayload,
       );
+      logger.info({ taskId: id, res }, 'DEBUG saveTaskWithList response');
 
       const updatedTask: GcpTask = {
         taskId: id,
