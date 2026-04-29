@@ -13,6 +13,7 @@ import {
   criarTarefa,
   atualizarTarefa,
   buscarTarefasPorProcesso,
+  comentarTarefa,
 } from '../services/tarefas.service.js';
 import {
   criarAtendimento,
@@ -239,6 +240,26 @@ export function createMcpServer(): McpServer {
     async (input) => {
       const { id, ...updateInput } = input;
       const result = await atualizarTarefa(id, updateInput);
+      if (!result.ok) {
+        return {
+          content: [{ type: 'text', text: `Erro: ${result.error.message}` }],
+          isError: true,
+        };
+      }
+      const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
+      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
+    },
+  );
+
+  server.tool(
+    'comentar_tarefa',
+    'Adiciona um comentário (texto puro) em uma tarefa do Astrea — equivale à aba "Comentários" da UI. Útil para registrar o que foi feito ao concluir, ou para deixar instruções na tarefa atribuída a outro colaborador. Não suporta menção (@usuário) nem anexos nesta versão.',
+    {
+      tarefaId: z.string(),
+      texto: z.string(),
+    },
+    async (input) => {
+      const result = await comentarTarefa(input.tarefaId, input.texto);
       if (!result.ok) {
         return {
           content: [{ type: 'text', text: `Erro: ${result.error.message}` }],

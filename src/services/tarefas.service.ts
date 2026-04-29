@@ -9,7 +9,12 @@ import {
 import { logger } from '../utils/logger.js';
 import { urlCaso } from '../utils/astrea-urls.js';
 import { isRetryablePlaywrightError } from '../utils/retry.js';
-import type { Tarefa, CriarTarefaInput, AtualizarTarefaInput } from '../models/index.js';
+import type {
+  Tarefa,
+  CriarTarefaInput,
+  AtualizarTarefaInput,
+  Comentario,
+} from '../models/index.js';
 import type { FiltrosTarefa, ServiceResponse, PaginationMeta } from '../types/index.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -428,6 +433,85 @@ export async function atualizarTarefa(
     return { ok: true, data: tarefa };
   } catch (err) {
     logger.error({ err, id }, 'Erro em atualizarTarefa');
+    return {
+      ok: false,
+      error: {
+        message: err instanceof Error ? err.message : 'Erro desconhecido',
+        code: 'API_ERROR',
+        retryable: isRetryablePlaywrightError(err),
+      },
+    };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// comentarTarefa
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface GcpComment {
+  taskId?: string;
+  text?: string;
+  when?: string;
+  userId?: string;
+  userName?: string;
+}
+
+export async function comentarTarefa(
+  taskId: string,
+  texto: string,
+): Promise<ServiceResponse<Comentario>> {
+  try {
+    const comentario = await withBrowserContext(async (page) => {
+      await navigateTo(page, WORKSPACE_PAGE_PATH);
+
+      const userId = await getAstreaUserId(page);
+      const when = new Date().toISOString();
+
+      const payload = {
+        taskId: String(taskId),
+        userId: String(userId),
+        text: texto,
+        type: 0,
+        when,
+        attachments: [],
+        driveFiles: [],
+        mentions: [],
+      };
+
+      const res = await gapiCall<any>(
+        page,
+        'workspace.taskListService',
+        'saveComment',
+        {},
+        payload,
+      );
+
+      // O backend pode devolver o comentário criado, a tarefa com lista de
+      // comentários, ou só metadata. Tentar extrair o comentário recém-criado
+      // do response; cair de volta nos dados que enviamos.
+      const fromResponse: GcpComment | undefined = (() => {
+        if (!res || typeof res !== 'object') return undefined;
+        if (Array.isArray(res.comments) && res.comments.length > 0) {
+          return res.comments[res.comments.length - 1] as GcpComment;
+        }
+        if (res.text || res.taskId) return res as GcpComment;
+        return undefined;
+      })();
+
+      const comentario: Comentario = {
+        tarefaId: String(fromResponse?.taskId ?? taskId),
+        texto: fromResponse?.text ?? texto,
+        autorId: String(fromResponse?.userId ?? userId),
+        autor: fromResponse?.userName,
+        criadoEm: fromResponse?.when ?? when,
+      };
+
+      return comentario;
+    });
+
+    return { ok: true, data: comentario };
+  } catch (err) {
+    logger.error({ err, taskId }, 'Erro em comentarTarefa');
     return {
       ok: false,
       error: {

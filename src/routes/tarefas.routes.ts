@@ -1,6 +1,12 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
-import { listarTarefas, buscarTarefasPorProcesso, criarTarefa, atualizarTarefa } from '../services/tarefas.service.js';
+import {
+  listarTarefas,
+  buscarTarefasPorProcesso,
+  criarTarefa,
+  atualizarTarefa,
+  comentarTarefa,
+} from '../services/tarefas.service.js';
 import type { ApiResponse, ApiError } from '../types/index.js';
 
 const router = Router();
@@ -46,6 +52,10 @@ const atualizarTarefaSchema = z.object({
   prioridade: z.number().optional(),
 });
 
+const comentarTarefaSchema = z.object({
+  texto: z.string().min(1, 'texto não pode ser vazio'),
+});
+
 /** GET /api/tarefas */
 router.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -88,6 +98,25 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const body = criarTarefaSchema.parse(req.body);
     const result = await criarTarefa(body);
+
+    if (!result.ok) {
+      const error: ApiError = { success: false, error: result.error.message, code: result.error.code };
+      res.status(result.error.code === 'VALIDATION_ERROR' ? 400 : result.error.code === 'BROWSER_UNAVAILABLE' ? 503 : 500).json(error);
+      return;
+    }
+
+    const response: ApiResponse<typeof result.data> = { success: true, data: result.data };
+    res.status(201).json(response);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** POST /api/tarefas/:id/comentarios */
+router.post('/:id/comentarios', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const body = comentarTarefaSchema.parse(req.body);
+    const result = await comentarTarefa(req.params.id, body.texto);
 
     if (!result.ok) {
       const error: ApiError = { success: false, error: result.error.message, code: result.error.code };

@@ -17,6 +17,7 @@ API REST que expõe dados do sistema jurídico [Astrea](https://astrea.net.br) v
 | `POST` | `/api/atendimentos`                             | Agenda um atendimento                   |
 | `POST` | `/api/atendimentos/:id/transformar-em-caso`     | Converte atendimento em caso            |
 | `POST` | `/api/atendimentos/:id/transformar-em-processo` | Converte atendimento em processo        |
+| `POST` | `/api/tarefas/:id/comentarios`                  | Adiciona comentário (texto puro) em tarefa |
 
 ## Autenticação
 
@@ -38,6 +39,7 @@ As operações de mutação novas também ficam disponíveis no MCP remoto/stdio
 - `criar_cliente`
 - `transformar_atendimento_em_caso`
 - `transformar_atendimento_em_processo`
+- `comentar_tarefa` — adiciona comentário em tarefa (texto puro; não aceita menção `@usuário` nem anexos nesta versão)
 
 ## Deploy com Docker
 

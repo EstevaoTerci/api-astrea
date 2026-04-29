@@ -38,7 +38,13 @@ export type {
 } from './cliente.js';
 export type { Caso, ProcessoResumido, Processo } from './caso.js';
 export type { Andamento } from './andamento.js';
-export type { Tarefa, CriarTarefaInput, AtualizarTarefaInput } from './tarefa.js';
+export type {
+  Tarefa,
+  CriarTarefaInput,
+  AtualizarTarefaInput,
+  Comentario,
+  ComentarTarefaInput,
+} from './tarefa.js';
 export type { Publicacao } from './publicacao.js';
 export type { Usuario } from './usuario.js';
 export type {

@@ -42,3 +42,20 @@ export interface AtualizarTarefaInput {
   responsavelId?: string;
   prioridade?: number;
 }
+
+export interface Comentario {
+  /** ID da tarefa em que o comentário foi inserido. */
+  tarefaId: string;
+  /** Texto puro do comentário. */
+  texto: string;
+  /** ID do usuário autor do comentário. */
+  autorId: string;
+  /** Nome exibido do autor (quando o backend devolve). */
+  autor?: string;
+  /** Timestamp ISO de criação. */
+  criadoEm: string;
+}
+
+export interface ComentarTarefaInput {
+  texto: string;
+}
