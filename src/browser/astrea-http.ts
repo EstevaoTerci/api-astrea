@@ -140,6 +140,28 @@ export async function astreaApiPost<T>(page: Page, path: string, body: unknown):
   );
 }
 
+/** PUT para a API REST do Astrea via Angular $http. */
+export async function astreaApiPut<T>(page: Page, path: string, body: unknown): Promise<T> {
+  return page.evaluate(
+    async ({ url, body }: { url: string; body: unknown }) => {
+      const http = (window as any).angular?.element(document.body)?.injector()?.get('$http');
+      if (!http) throw new Error('Angular $http não disponível');
+
+      try {
+        const res = await http.put(url, body);
+        return res.data as T;
+      } catch (err: any) {
+        const status = err?.status ?? 'UNKNOWN';
+        const rawMessage =
+          err?.data?.errorMessage ?? err?.data ?? err?.message ?? err?.statusText ?? err;
+        const detail = typeof rawMessage === 'string' ? rawMessage : JSON.stringify(rawMessage);
+        throw new Error(`API_ERROR_${status}: ${detail}`);
+      }
+    },
+    { url: `${ASTREA_API}${path}`, body },
+  );
+}
+
 /** DELETE para a API REST do Astrea via Angular $http. */
 export async function astreaApiDelete<T>(page: Page, path: string): Promise<T> {
   return page.evaluate(async (url: string) => {

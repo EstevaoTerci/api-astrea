@@ -28,6 +28,11 @@ import {
   buscarAndamentosRecentes,
 } from '../services/andamentos.service.js';
 import { listarPublicacoes } from '../services/publicacoes.service.js';
+import {
+  listarQuadros,
+  listarAtividadesQuadro,
+  moverAtividade,
+} from '../services/kanban.service.js';
 
 export function createMcpServer(): McpServer {
   const server = new McpServer({
@@ -507,6 +512,59 @@ export function createMcpServer(): McpServer {
       }
       const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
       return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
+    },
+  );
+
+  server.tool(
+    'listar_quadros_kanban',
+    'Lista os quadros (boards) do módulo "Gestão Kanban" do escritório, com suas colunas. Cada quadro tem `padrao=true` quando é o quadro principal do tenant. Use para descobrir o `quadroId` e os `colunaId` antes de listar atividades ou mover cards.',
+    {},
+    async () => {
+      const result = await listarQuadros();
+      if (!result.ok) {
+        return { content: [{ type: 'text', text: `Erro: ${result.error.message}` }], isError: true };
+      }
+      return { content: [{ type: 'text', text: JSON.stringify(result.data, null, 2) }] };
+    },
+  );
+
+  server.tool(
+    'listar_atividades_kanban',
+    'Lista as atividades (cards) de um quadro Kanban, agrupadas por coluna. Atividades com `tipo === "TASK"` têm `id` igual ao `taskId` — pode ser usado em `comentar_tarefa`/`atualizar_tarefa`. Janela padrão: mês corrente. Filtros: `prazoInicio`/`prazoFim` (YYYY-MM-DD), `dias` (últimos N dias), `responsavelId`, `envolvidosIds`, `tipos` (ex.: ["TASK"]). Cada atividade inclui `urlCaso` quando há caso/processo vinculado.',
+    {
+      quadroId: z.string(),
+      prazoInicio: z.string().optional(),
+      prazoFim: z.string().optional(),
+      dias: z.number().optional(),
+      responsavelId: z.string().optional(),
+      envolvidosIds: z.array(z.string()).optional(),
+      tipos: z.array(z.string()).optional(),
+      limite: z.number().optional(),
+    },
+    async (input) => {
+      const { quadroId, ...filtros } = input;
+      const result = await listarAtividadesQuadro(quadroId, filtros);
+      if (!result.ok) {
+        return { content: [{ type: 'text', text: `Erro: ${result.error.message}` }], isError: true };
+      }
+      return { content: [{ type: 'text', text: JSON.stringify(result.data, null, 2) }] };
+    },
+  );
+
+  server.tool(
+    'mover_atividade_kanban',
+    'Move uma atividade (card) entre colunas de um quadro Kanban. Use `listar_quadros_kanban` para obter `quadroId` e os `colunaDestinoId` válidos.',
+    {
+      quadroId: z.string(),
+      atividadeId: z.string(),
+      colunaDestinoId: z.string(),
+    },
+    async (input) => {
+      const result = await moverAtividade(input.quadroId, input.atividadeId, input.colunaDestinoId);
+      if (!result.ok) {
+        return { content: [{ type: 'text', text: `Erro: ${result.error.message}` }], isError: true };
+      }
+      return { content: [{ type: 'text', text: JSON.stringify(result.data, null, 2) }] };
     },
   );
 

@@ -18,6 +18,7 @@ import tarefasRoutes from './routes/tarefas.routes.js';
 import publicacoesRoutes from './routes/publicacoes.routes.js';
 import atendimentosRoutes from './routes/atendimentos.routes.js';
 import usuariosRoutes from './routes/usuarios.routes.js';
+import kanbanRoutes from './routes/kanban.routes.js';
 import mcpRoutes, { shutdownMcpSessions } from './routes/mcp.routes.js';
 
 const app = express();
@@ -33,7 +34,7 @@ app.use(helmet());
 app.use(
   cors({
     origin: env.NODE_ENV === 'production' ? false : '*',
-    methods: ['GET', 'POST', 'PATCH', 'DELETE'],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
   }),
 );
 app.use(express.json({ limit: '1mb' }));
@@ -61,6 +62,7 @@ app.use('/api/tarefas', tarefasRoutes);
 app.use('/api/publicacoes', publicacoesRoutes);
 app.use('/api/atendimentos', atendimentosRoutes);
 app.use('/api/usuarios', usuariosRoutes);
+app.use('/api/kanban', kanbanRoutes);
 
 // Rota catch-all para 404
 app.use((_req, res) => {

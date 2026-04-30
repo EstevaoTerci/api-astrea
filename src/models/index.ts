@@ -54,3 +54,14 @@ export type {
   TransformarAtendimentoEmCasoInput,
   TransformarAtendimentoEmProcessoInput,
 } from './atendimento.js';
+export type {
+  QuadroKanban,
+  ColunaKanban,
+  TipoColunaKanban,
+  AtividadeKanban,
+  AtividadesPorColuna,
+  QuadroAtividades,
+  PrioridadeKanban,
+  FiltrosAtividadeKanban,
+  MoverAtividadeInput,
+} from './kanban.js';
