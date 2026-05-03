@@ -13,13 +13,57 @@ import type { ApiResponse, ApiError } from '../types/index.js';
 
 const router = Router();
 
+/**
+ * Aceita "1,2,3" (CSV) ou ["1","2"] (param repetido) e retorna number[].
+ * Usado para `etiquetasIds` no query string.
+ */
+const idsArraySchema = z
+  .preprocess((val) => {
+    if (val == null || val === '') return undefined;
+    if (Array.isArray(val)) return val;
+    if (typeof val === 'string') {
+      return val
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+    }
+    return val;
+  }, z.array(z.coerce.number().int().positive()))
+  .optional();
+
+const booleanQuerySchema = z
+  .preprocess((val) => {
+    if (typeof val === 'string') {
+      if (val === 'true' || val === '1') return true;
+      if (val === 'false' || val === '0') return false;
+    }
+    return val;
+  }, z.boolean())
+  .optional();
+
+const filtrosNativosSchema = {
+  mesAniversario: z.coerce.number().int().min(1).max(12).optional(),
+  estado: z
+    .string()
+    .trim()
+    .length(2)
+    .transform((v) => v.toUpperCase())
+    .optional(),
+  etiquetasIds: idsArraySchema,
+  apenasComEmail: booleanQuerySchema,
+};
+
 const querySchema = z.object({
   nome: z.string().optional(),
   cpfCnpj: z.string().optional(),
   email: z.string().optional(),
+  ...filtrosNativosSchema,
+  buscarEmEmpresa: booleanQuerySchema,
   pagina: z.coerce.number().int().positive().default(1),
   limite: z.coerce.number().int().min(1).max(100).default(50),
 });
+
+const queryTodosSchema = z.object(filtrosNativosSchema);
 
 const criarClienteSchema = z.object({
   nome: z.string().min(1),
@@ -153,9 +197,10 @@ router.post('/mesclar', async (req: Request, res: Response, next: NextFunction) 
 });
 
 /** GET /api/clientes/todos — Lista completa de todos os clientes com ID e nome */
-router.get('/todos', async (_req: Request, res: Response, next: NextFunction) => {
+router.get('/todos', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const result = await listarTodosClientes();
+    const filtros = queryTodosSchema.parse(req.query);
+    const result = await listarTodosClientes(filtros);
 
     if (!result.ok) {
       const error: ApiError = {

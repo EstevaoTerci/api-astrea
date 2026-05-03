@@ -36,9 +36,28 @@ export interface FiltrosCliente {
   nome?: string;
   cpfCnpj?: string;
   email?: string;
+  /** Mês de aniversário (1-12). Filtro server-side via `queryDTO.birthMonth` do Astrea. */
+  mesAniversario?: number;
+  /** UF do endereço (ex: "SP"). Filtro server-side via `queryDTO.state` do Astrea. */
+  estado?: string;
+  /** IDs numéricos das etiquetas/tags. Filtro server-side via `queryDTO.selectedTagsIds`. */
+  etiquetasIds?: number[];
+  /** Quando true, retorna apenas contatos com email cadastrado (`queryDTO.onlyWithEmail`). */
+  apenasComEmail?: boolean;
+  /**
+   * Quando true, a busca textual (`nome`/`cpfCnpj`) também procura no campo
+   * empresa/cargo do contato (`queryDTO.searchInCompany`).
+   */
+  buscarEmEmpresa?: boolean;
   pagina?: number;
   limite?: number;
 }
+
+/** Subconjunto de filtros aceitos por `listarTodosClientes` (sem busca textual e sem paginação). */
+export type FiltrosTodosClientes = Pick<
+  FiltrosCliente,
+  'mesAniversario' | 'estado' | 'etiquetasIds' | 'apenasComEmail'
+>;
 
 export interface FiltrosCaso {
   clienteId?: string;

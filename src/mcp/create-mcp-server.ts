@@ -42,11 +42,16 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'listar_clientes',
-    'Lista clientes do escritório com filtros opcionais. O filtro `cpfCnpj` aceita com ou sem máscara (comparação feita pelos dígitos). Cada item inclui `url` com o link direto do contato no app do Astrea.',
+    'Lista clientes do escritório com filtros opcionais. O filtro `cpfCnpj` aceita com ou sem máscara (comparação feita pelos dígitos). Filtros nativos do Astrea (aplicados server-side, sem chamadas extras): `mesAniversario` (1-12, ex.: 5 = aniversariantes de maio), `estado` (UF, ex.: "SP"), `etiquetasIds` (IDs numéricos das tags), `apenasComEmail` (true para retornar só contatos com email cadastrado), `buscarEmEmpresa` (true estende a busca textual ao campo empresa/cargo). Cada item inclui `url` com o link direto do contato no app do Astrea.',
     {
       nome: z.string().optional(),
       email: z.string().optional(),
       cpfCnpj: z.string().optional(),
+      mesAniversario: z.number().int().min(1).max(12).optional(),
+      estado: z.string().length(2).optional(),
+      etiquetasIds: z.array(z.number().int().positive()).optional(),
+      apenasComEmail: z.boolean().optional(),
+      buscarEmEmpresa: z.boolean().optional(),
       pagina: z.number().optional(),
       limite: z.number().optional(),
     },
@@ -84,10 +89,15 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'listar_todos_clientes',
-    'Lista todos os clientes (resumido, sem paginação). Cada item inclui `url` com o link direto do contato no app do Astrea.',
-    {},
-    async () => {
-      const result = await listarTodosClientes();
+    'Lista todos os clientes (resumido, sem paginação). Aceita filtros nativos do Astrea aplicados server-side: `mesAniversario` (1-12), `estado` (UF), `etiquetasIds` (IDs das tags), `apenasComEmail`. Use `mesAniversario` para responder "quem faz aniversário em <mês>" sem chamar `buscar_cliente` por ID — uma única chamada já filtra. Cada item inclui `url` com o link direto do contato no app do Astrea.',
+    {
+      mesAniversario: z.number().int().min(1).max(12).optional(),
+      estado: z.string().length(2).optional(),
+      etiquetasIds: z.array(z.number().int().positive()).optional(),
+      apenasComEmail: z.boolean().optional(),
+    },
+    async (input) => {
+      const result = await listarTodosClientes(input);
       if (!result.ok) {
         return {
           content: [{ type: 'text', text: `Erro: ${result.error.message}` }],

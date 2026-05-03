@@ -10,7 +10,12 @@ import type {
   CriarClienteInput,
   DocumentoContato,
 } from '../models/index.js';
-import type { FiltrosCliente, ServiceResponse, PaginationMeta } from '../types/index.js';
+import type {
+  FiltrosCliente,
+  FiltrosTodosClientes,
+  ServiceResponse,
+  PaginationMeta,
+} from '../types/index.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes
@@ -396,22 +401,44 @@ function formatarDocumentoComMascara(documento: string): string | undefined {
   return undefined;
 }
 
-function buildSearchPayload(text: string, apiPage: number, limit: number) {
+interface QueryDTOFiltros {
+  text?: string;
+  mesAniversario?: number;
+  estado?: string;
+  etiquetasIds?: number[];
+  apenasComEmail?: boolean;
+  buscarEmEmpresa?: boolean;
+}
+
+/**
+ * Monta o `queryDTO` aceito pelo POST /contact/all do Astrea, mapeando os
+ * nomes em PT-BR da nossa API para os campos originais. Campos não passados
+ * recebem o valor "neutro" que a UI usa no estado padrão.
+ */
+function buildQueryDTO(filtros: QueryDTOFiltros) {
   return {
-    queryDTO: {
-      type: '',
-      text: text.trim(),
-      order: 'nameUpperCase',
-      selectedTagsIds: [],
-      startsWith: [],
-      onlyWithEmail: false,
-      searchInCompany: false,
-      customerNotificationTypeFilter: 'ALL',
-      customerNotification: ['CLIPPING', 'AUTOMATIC_HISTORIES'],
-      customerNotificationArtificialIntelligenceFilter: 'ALL',
-      birthMonth: 0,
-      state: '',
-    },
+    type: '',
+    text: (filtros.text ?? '').trim(),
+    order: 'nameUpperCase',
+    selectedTagsIds: filtros.etiquetasIds ?? [],
+    startsWith: [],
+    onlyWithEmail: filtros.apenasComEmail ?? false,
+    searchInCompany: filtros.buscarEmEmpresa ?? false,
+    customerNotificationTypeFilter: 'ALL',
+    customerNotification: ['CLIPPING', 'AUTOMATIC_HISTORIES'],
+    customerNotificationArtificialIntelligenceFilter: 'ALL',
+    birthMonth: filtros.mesAniversario ?? 0,
+    state: filtros.estado?.trim() ?? '',
+  };
+}
+
+function buildSearchPayload(
+  filtros: QueryDTOFiltros,
+  apiPage: number,
+  limit: number,
+) {
+  return {
+    queryDTO: buildQueryDTO(filtros),
     page: apiPage,
     limit,
   };
@@ -452,7 +479,18 @@ export async function listarClientes(
       const response = await astreaApiPost<AstreaContactListResponse>(
         page,
         `${ASTREA_API}/contact/all`,
-        buildSearchPayload(searchText, pagina - 1, limite),
+        buildSearchPayload(
+          {
+            text: searchText,
+            mesAniversario: filtros?.mesAniversario,
+            estado: filtros?.estado,
+            etiquetasIds: filtros?.etiquetasIds,
+            apenasComEmail: filtros?.apenasComEmail,
+            buscarEmEmpresa: filtros?.buscarEmEmpresa,
+          },
+          pagina - 1,
+          limite,
+        ),
       );
 
       let contacts = response.contacts ?? [];
@@ -557,31 +595,27 @@ export async function listarClientes(
 // 100% HTTP request — nenhum scraping envolvido.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function listarTodosClientes(): Promise<ServiceResponse<ClienteResumido[]>> {
+export async function listarTodosClientes(
+  filtros?: FiltrosTodosClientes,
+): Promise<ServiceResponse<ClienteResumido[]>> {
   try {
     const data = await withBrowserContext(async (page) => {
       // Garante que o app AngularJS está carregado
       await navigateTo(page, ANGULAR_PAGE_PATH);
 
-      logger.debug('Buscando lista completa de contatos via API...');
+      logger.debug({ filtros }, 'Buscando lista completa de contatos via API...');
 
       const response = await astreaApiPost<AstreaContactListResponse>(
         page,
         `${ASTREA_API}/contact/all`,
         {
           queryDTO: {
-            type: '',
-            text: '',
-            order: 'nameUpperCase',
-            selectedTagsIds: [],
-            startsWith: [],
-            onlyWithEmail: false,
-            searchInCompany: false,
-            customerNotificationTypeFilter: 'ALL',
-            customerNotification: ['CLIPPING', 'AUTOMATIC_HISTORIES'],
-            customerNotificationArtificialIntelligenceFilter: 'ALL',
-            birthMonth: 0,
-            state: '',
+            ...buildQueryDTO({
+              mesAniversario: filtros?.mesAniversario,
+              estado: filtros?.estado,
+              etiquetasIds: filtros?.etiquetasIds,
+              apenasComEmail: filtros?.apenasComEmail,
+            }),
             onlyCount: false,
           },
           paging: { pageNumber: 0, pageSize: 9999 },
@@ -1105,7 +1139,7 @@ export async function buscarCliente(idOrNomeCpf: string): Promise<ServiceRespons
         const listResponse = await astreaApiPost<AstreaContactListResponse>(
           page,
           `${ASTREA_API}/contact/all`,
-          buildSearchPayload(contactId, 0, 1),
+          buildSearchPayload({ text: contactId }, 0, 1),
         );
 
         if (!listResponse.contacts?.length) {
