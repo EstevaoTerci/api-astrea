@@ -4,20 +4,38 @@ API REST que expõe dados do sistema jurídico [Astrea](https://astrea.net.br) v
 
 ## Endpoints
 
-| Método | Rota                                            | Descrição                               |
-| ------ | ----------------------------------------------- | --------------------------------------- |
-| `GET`  | `/health`                                       | Health check                            |
-| `POST` | `/api/clientes`                                 | Cria cliente/contato                    |
-| `GET`  | `/api/clientes`                                 | Buscar clientes por nome (`?nome=`)     |
-| `GET`  | `/api/clientes/todos`                           | Lista completa de todos os clientes     |
-| `GET`  | `/api/clientes/:id`                             | Detalhes do cliente (inclui documentos) |
-| `GET`  | `/api/clientes/:id/casos`                       | Casos/processos do cliente              |
-| `GET`  | `/api/casos/:id`                                | Detalhes completos de um caso/processo  |
-| `GET`  | `/api/casos/:id/andamentos`                     | Andamentos do caso                      |
-| `POST` | `/api/atendimentos`                             | Agenda um atendimento                   |
-| `POST` | `/api/atendimentos/:id/transformar-em-caso`     | Converte atendimento em caso            |
-| `POST` | `/api/atendimentos/:id/transformar-em-processo` | Converte atendimento em processo        |
-| `POST` | `/api/tarefas/:id/comentarios`                  | Adiciona comentário (texto puro) em tarefa |
+| Método  | Rota                                            | Descrição                                              |
+| ------- | ----------------------------------------------- | ------------------------------------------------------ |
+| `GET`   | `/health`                                       | Health check                                           |
+| `POST`  | `/api/clientes`                                 | Cria cliente/contato                                   |
+| `GET`   | `/api/clientes`                                 | Buscar clientes (ver filtros abaixo)                   |
+| `GET`   | `/api/clientes/todos`                           | Lista completa de todos os clientes (ver filtros)      |
+| `GET`   | `/api/clientes/:id`                             | Detalhes do cliente (inclui documentos)                |
+| `PATCH` | `/api/clientes/:id`                             | Atualiza parcialmente o cadastro (campos não passados ficam intactos) |
+| `GET`   | `/api/clientes/:id/casos`                       | Casos/processos do cliente                             |
+| `GET`   | `/api/casos/:id`                                | Detalhes completos de um caso/processo                 |
+| `GET`   | `/api/casos/:id/andamentos`                     | Andamentos do caso                                     |
+| `POST`  | `/api/atendimentos`                             | Agenda um atendimento                                  |
+| `POST`  | `/api/atendimentos/:id/transformar-em-caso`     | Converte atendimento em caso                           |
+| `POST`  | `/api/atendimentos/:id/transformar-em-processo` | Converte atendimento em processo                       |
+| `POST`  | `/api/tarefas/:id/comentarios`                  | Adiciona comentário (texto puro) em tarefa             |
+
+### Filtros nativos do Astrea (queryDTO) em `GET /api/clientes` e `GET /api/clientes/todos`
+
+Mapeiam direto para o `queryDTO` do `POST /contact/all` interno do Astrea — aplicados server-side, **sem chamadas extras**. Cada filtro reduz a quantidade de dados trafegados e elimina a necessidade de buscar o detalhe individual de cada contato.
+
+| Param           | Tipo            | Mapeia para                                | Disponível em                |
+| --------------- | --------------- | ------------------------------------------ | ---------------------------- |
+| `nome`          | `string`        | `queryDTO.text` (busca textual)            | `GET /api/clientes`          |
+| `cpfCnpj`       | `string`        | `queryDTO.text` (com/sem máscara)          | `GET /api/clientes`          |
+| `email`         | `string`        | filtro local pós-resposta                  | `GET /api/clientes`          |
+| `mesAniversario`| `1..12`         | `queryDTO.birthMonth`                      | ambos                        |
+| `estado`        | `string` (UF)   | `queryDTO.state`                           | ambos                        |
+| `etiquetasIds`  | `number[]` (CSV ou repetido) | `queryDTO.selectedTagsIds`    | ambos                        |
+| `apenasComEmail`| `boolean`       | `queryDTO.onlyWithEmail`                   | ambos                        |
+| `buscarEmEmpresa`| `boolean`      | `queryDTO.searchInCompany`                 | apenas `GET /api/clientes`   |
+
+**Caso de uso típico:** "aniversariantes do mês" passa de `1 + N` chamadas (1 para listar IDs + N para buscar detalhe de cada) para `1 + ~N/12` (a chamada inicial já filtra por mês — só os ~190 do mês precisam de detalhe, em vez de 2.300+ do total).
 
 ## Autenticação
 
@@ -37,9 +55,12 @@ Para clientes remotos, prefira apontar para a URL interna do serviço no Coolify
 As operações de mutação novas também ficam disponíveis no MCP remoto/stdio:
 
 - `criar_cliente`
+- `atualizar_cliente` — PATCH parcial no cadastro do contato (corrigir typo no nome, atualizar telefone/email/endereço/etc.). Campos não informados ficam intactos. Não permite alterar perfil/tipo (cliente↔contato, PF↔PJ) — para isso, use a UI do Astrea.
 - `transformar_atendimento_em_caso`
 - `transformar_atendimento_em_processo`
 - `comentar_tarefa` — adiciona comentário em tarefa (texto puro; não aceita menção `@usuário` nem anexos nesta versão)
+
+As tools de listagem `listar_clientes` e `listar_todos_clientes` também aceitam os filtros nativos do `queryDTO` documentados acima (`mesAniversario`, `estado`, `etiquetasIds`, `apenasComEmail`, `buscarEmEmpresa`).
 
 ## Deploy com Docker
 
