@@ -19,6 +19,7 @@ API REST que expõe dados do sistema jurídico [Astrea](https://astrea.net.br) v
 | `POST`  | `/api/atendimentos/:id/transformar-em-caso`     | Converte atendimento em caso                           |
 | `POST`  | `/api/atendimentos/:id/transformar-em-processo` | Converte atendimento em processo                       |
 | `POST`  | `/api/tarefas/:id/comentarios`                  | Adiciona comentário (texto puro) em tarefa             |
+| `GET`   | `/api/agenda`                                   | Agenda unificada (prazos+tarefas+atendimentos+audiências) por advogado/janela |
 
 ### Filtros nativos do Astrea (queryDTO) em `GET /api/clientes` e `GET /api/clientes/todos`
 
@@ -36,6 +37,21 @@ Mapeiam direto para o `queryDTO` do `POST /contact/all` interno do Astrea — ap
 | `buscarEmEmpresa`| `boolean`      | `queryDTO.searchInCompany`                 | apenas `GET /api/clientes`   |
 
 **Caso de uso típico:** "aniversariantes do mês" passa de `1 + N` chamadas (1 para listar IDs + N para buscar detalhe de cada) para `1 + ~N/12` (a chamada inicial já filtra por mês — só os ~190 do mês precisam de detalhe, em vez de 2.300+ do total).
+
+### `GET /api/agenda` — agenda unificada por advogado
+
+Wrapper fino sobre o endpoint interno `/calendar-pro/complete` do Astrea, o mesmo que monta a tela "Agenda" do app. Retorna prazos, tarefas, atendimentos e audiências numa única resposta — útil pra perguntas tipo "o que o LB tem essa semana?" sem orquestrar 3-4 chamadas no cliente.
+
+| Param            | Tipo                                                | Default                          | Notas |
+| ---------------- | --------------------------------------------------- | -------------------------------- | ----- |
+| `responsavelId`  | `string`                                            | todos os usuários ativos         | ID numérico do Astrea (use `GET /api/usuarios` para descobrir) |
+| `inicio`         | `YYYY-MM-DD`                                        | domingo da semana corrente       | |
+| `fim`            | `YYYY-MM-DD`                                        | 6 dias após `inicio`             | inclusivo |
+| `tipos`          | CSV ou repetido: `prazo,tarefa,atendimento,audiencia` | todos                          | ex.: `tipos=audiencia,atendimento` |
+| `status`         | `todos` \| `pendentes` \| `concluidos`              | `todos`                          | mapeia para `IN_PROGRESS`/`DONE` no Astrea |
+| `incluirSemPrazo`| `boolean`                                           | `false`                          | quando true, anexa tarefas sem deadline; só tem efeito se `tipos` incluir `tarefa` |
+
+Cada item retornado tem `tipo`, `tituloComResponsavel` (formato `"LB - Verificar processo"` igual ao app), `responsavelNome`, `urlCaso`, `numeroProcesso`, e campos específicos por tipo (`horaInicio`/`horaFim` para atendimentos/audiências; `forum`/`endereco`/`sala` para audiências).
 
 ## Autenticação
 

@@ -19,6 +19,7 @@ import publicacoesRoutes from './routes/publicacoes.routes.js';
 import atendimentosRoutes from './routes/atendimentos.routes.js';
 import usuariosRoutes from './routes/usuarios.routes.js';
 import kanbanRoutes from './routes/kanban.routes.js';
+import agendaRoutes from './routes/agenda.routes.js';
 import mcpRoutes, { shutdownMcpSessions } from './routes/mcp.routes.js';
 
 const app = express();
@@ -63,6 +64,7 @@ app.use('/api/publicacoes', publicacoesRoutes);
 app.use('/api/atendimentos', atendimentosRoutes);
 app.use('/api/usuarios', usuariosRoutes);
 app.use('/api/kanban', kanbanRoutes);
+app.use('/api/agenda', agendaRoutes);
 
 // Rota catch-all para 404
 app.use((_req, res) => {

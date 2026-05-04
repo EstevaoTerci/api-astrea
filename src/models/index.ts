@@ -66,3 +66,8 @@ export type {
   FiltrosAtividadeKanban,
   MoverAtividadeInput,
 } from './kanban.js';
+export type {
+  EventoAgenda,
+  TipoEventoAgenda,
+  StatusEventoAgenda,
+} from './agenda.js';

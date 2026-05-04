@@ -17,6 +17,9 @@ export type {
   CriarAtendimentoInput,
   TransformarAtendimentoEmCasoInput,
   TransformarAtendimentoEmProcessoInput,
+  EventoAgenda,
+  TipoEventoAgenda,
+  StatusEventoAgenda,
 } from '../models/index.js';
 
 export interface FiltrosAtendimento {
@@ -102,6 +105,24 @@ export interface FiltrosPublicacao {
   responsavel?: string;
   pagina?: number;
   limite?: number;
+}
+
+export interface FiltrosAgenda {
+  /** ID do responsável a filtrar. Se ausente, retorna agenda de todos os usuários ativos. */
+  responsavelId?: string;
+  /** Início da janela em `YYYY-MM-DD`. Default: domingo da semana corrente. */
+  inicio?: string;
+  /** Fim da janela (inclusivo) em `YYYY-MM-DD`. Default: 6 dias após `inicio`. */
+  fim?: string;
+  /** Tipos a incluir. Se ausente ou vazio, todos. */
+  tipos?: Array<'prazo' | 'tarefa' | 'atendimento' | 'audiencia'>;
+  /** "todos" (default), "pendentes" (status IN_PROGRESS) ou "concluidos" (status DONE). */
+  status?: 'todos' | 'pendentes' | 'concluidos';
+  /**
+   * Quando true, inclui também tarefas sem prazo. Útil para "o que LB tem
+   * pendente sem deadline marcada". Aplicado apenas se `tipos` incluir tarefa.
+   */
+  incluirSemPrazo?: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

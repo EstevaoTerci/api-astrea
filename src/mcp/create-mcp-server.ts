@@ -34,6 +34,7 @@ import {
   listarAtividadesQuadro,
   moverAtividade,
 } from '../services/kanban.service.js';
+import { listarAgenda } from '../services/agenda.service.js';
 
 export function createMcpServer(): McpServer {
   const server = new McpServer({
@@ -618,6 +619,30 @@ export function createMcpServer(): McpServer {
         return { content: [{ type: 'text', text: `Erro: ${result.error.message}` }], isError: true };
       }
       return { content: [{ type: 'text', text: JSON.stringify(result.data, null, 2) }] };
+    },
+  );
+
+  server.tool(
+    'listar_agenda',
+    'Retorna a agenda unificada do escritório no Astrea — prazos, tarefas, atendimentos e audiências numa única chamada, igual à tela "Agenda" do app. Use para responder perguntas como "o que a Letícia Bernabé tem essa semana?" ou "quais audiências do Rafael Victor no próximo mês?". Filtros: `responsavelId` (omitir = todos os ativos; descubra o ID via `listar_usuarios`), `inicio`/`fim` em YYYY-MM-DD (default = semana corrente, domingo a sábado), `tipos` (subset de prazo/tarefa/atendimento/audiencia), `status` (todos/pendentes/concluidos), `incluirSemPrazo` (true para também trazer tarefas sem deadline marcada). Cada item inclui `responsavelNome`, `tituloComResponsavel` (formato "iniciais - título" usado pelo Astrea), `urlCaso`, e campos específicos por tipo (horários para atendimentos/audiências; `forum`/`endereco`/`sala` para audiências).',
+    {
+      responsavelId: z.string().optional(),
+      inicio: z.string().optional(),
+      fim: z.string().optional(),
+      tipos: z.array(z.enum(['prazo', 'tarefa', 'atendimento', 'audiencia'])).optional(),
+      status: z.enum(['todos', 'pendentes', 'concluidos']).optional(),
+      incluirSemPrazo: z.boolean().optional(),
+    },
+    async (input) => {
+      const result = await listarAgenda(input);
+      if (!result.ok) {
+        return {
+          content: [{ type: 'text', text: `Erro: ${result.error.message}` }],
+          isError: true,
+        };
+      }
+      const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
+      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
     },
   );
 
