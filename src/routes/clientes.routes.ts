@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import {
+  atualizarCliente,
   buscarCliente,
   criarCliente,
   listarClientes,
@@ -65,6 +66,20 @@ const querySchema = z.object({
 
 const queryTodosSchema = z.object(filtrosNativosSchema);
 
+const enderecoSchema = z.union([
+  z.string(),
+  z.object({
+    cep: z.string().optional(),
+    logradouro: z.string().optional(),
+    numero: z.string().optional(),
+    complemento: z.string().optional(),
+    bairro: z.string().optional(),
+    cidade: z.string().optional(),
+    estado: z.string().optional(),
+    pais: z.string().optional(),
+  }),
+]);
+
 const criarClienteSchema = z.object({
   nome: z.string().min(1),
   perfil: z.enum(['cliente', 'contato']).optional(),
@@ -75,22 +90,23 @@ const criarClienteSchema = z.object({
   site: z.string().optional(),
   email: z.string().optional(),
   telefone: z.string().optional(),
-  endereco: z
-    .union([
-      z.string(),
-      z.object({
-        cep: z.string().optional(),
-        logradouro: z.string().optional(),
-        numero: z.string().optional(),
-        complemento: z.string().optional(),
-        bairro: z.string().optional(),
-        cidade: z.string().optional(),
-        estado: z.string().optional(),
-        pais: z.string().optional(),
-      }),
-    ])
-    .optional(),
+  endereco: enderecoSchema.optional(),
 });
+
+const atualizarClienteSchema = z
+  .object({
+    nome: z.string().min(1).optional(),
+    apelido: z.string().optional(),
+    cpfCnpj: z.string().optional(),
+    origem: z.string().optional(),
+    site: z.string().optional(),
+    email: z.string().optional(),
+    telefone: z.string().optional(),
+    endereco: enderecoSchema.optional(),
+  })
+  .refine((v) => Object.values(v).some((x) => x !== undefined), {
+    message: 'Pelo menos um campo deve ser informado para atualização',
+  });
 
 /** GET /api/clientes */
 router.get('/', async (req: Request, res: Response, next: NextFunction) => {
@@ -218,6 +234,42 @@ router.get('/todos', async (req: Request, res: Response, next: NextFunction) => 
       data: result.data,
       meta: result.meta,
     };
+    res.json(response);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * PATCH /api/clientes/:id
+ * Atualiza parcialmente o cadastro de um contato. Campos não informados
+ * permanecem inalterados.
+ */
+router.patch('/:id', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { id } = req.params;
+    const body = atualizarClienteSchema.parse(req.body);
+    const result = await atualizarCliente(id, body);
+
+    if (!result.ok) {
+      const error: ApiError = {
+        success: false,
+        error: result.error.message,
+        code: result.error.code,
+      };
+      const status =
+        result.error.code === 'VALIDATION_ERROR'
+          ? 400
+          : result.error.code === 'NOT_FOUND'
+            ? 404
+            : result.error.code === 'BROWSER_UNAVAILABLE'
+              ? 503
+              : 500;
+      res.status(status).json(error);
+      return;
+    }
+
+    const response: ApiResponse<typeof result.data> = { success: true, data: result.data };
     res.json(response);
   } catch (err) {
     next(err);

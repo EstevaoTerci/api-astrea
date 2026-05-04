@@ -8,6 +8,7 @@ import type {
   Cliente,
   ClienteResumido,
   CriarClienteInput,
+  AtualizarClienteInput,
   DocumentoContato,
 } from '../models/index.js';
 import type {
@@ -949,6 +950,231 @@ export async function criarCliente(input: CriarClienteInput): Promise<ServiceRes
         message:
           err instanceof Error ? err.message.replace(/^API_ERROR:\s*/, '') : 'Erro desconhecido',
         code: 'API_ERROR',
+        retryable: isRetryablePlaywrightError(err),
+      },
+    };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Service: Atualizar Cliente (PATCH parcial)
+//
+// PATCH /api/clientes/:id
+//
+// Fluxo 100% HTTP (sem webscraping):
+//  1. GET /api/v2/contact/{id}/details — pega o objeto atual completo
+//  2. Normalização: birthYear/birthDay/birthMonth vêm como string em /details
+//     mas /save espera number. Endereços precisam de countryName preenchido
+//     (o /details omite, mas a UI sempre envia "Brasil" quando countryCode="76").
+//  3. Aplica os overrides do input sobre o objeto normalizado
+//  4. POST /api/v2/contact/save com o objeto inteiro (operação é "full replace",
+//     não PATCH — por isso temos que ler antes e mesclar)
+//
+// Discovery feito em 2026-05-03 capturando a request real da UI ao salvar
+// uma edição. Diff entre /details (read) e /save (write):
+//   - birth* (string vs number)
+//   - addresses[].countryName ausente em /details
+//   - emails:[] vs emails:[{typeEnum:"BLANK",valid:true}] (UI manda placeholder)
+//   - classificationEditDisabled e company aparecem só no /save (metadata UI)
+// Os campos "metadata" são re-enviados por garantia.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Converte para number quando o valor é numérico-string ou number; caso contrário undefined.
+ * /details retorna birthYear/Day/Month como string ("1964"), mas /save espera number.
+ */
+function toFiniteNumber(v: unknown): number | undefined {
+  if (v === null || v === undefined || v === '') return undefined;
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+/**
+ * Normaliza o objeto retornado por /contact/{id}/details para o formato
+ * exato esperado por POST /contact/save. Não muda a semântica — só ajusta
+ * tipos/campos que a UI preenche silenciosamente.
+ */
+function normalizeDetailsForSave(
+  d: AstreaContactDetails & Record<string, unknown>,
+): Record<string, unknown> {
+  const addresses = Array.isArray(d.addresses)
+    ? d.addresses.map((a) => {
+        const addr = a as Record<string, unknown>;
+        return {
+          ...addr,
+          countryName:
+            (addr.countryName as string | undefined) ??
+            (addr.countryCode === '76' ? 'Brasil' : undefined),
+        };
+      })
+    : d.addresses;
+
+  return {
+    ...d,
+    birthYear: toFiniteNumber(d.birthYear),
+    birthDay: toFiniteNumber(d.birthDay),
+    birthMonth: toFiniteNumber(d.birthMonth),
+    addresses,
+    classificationEditDisabled: true,
+    company: null,
+  };
+}
+
+/**
+ * Aplica os overrides parciais do AtualizarClienteInput sobre o objeto base
+ * (já normalizado a partir de /details). Campos não passados ficam intactos.
+ */
+function applyContactPatch(
+  base: Record<string, unknown>,
+  input: AtualizarClienteInput,
+): Record<string, unknown> {
+  const patched: Record<string, unknown> = { ...base };
+
+  if (input.nome !== undefined) patched.name = input.nome.trim();
+  if (input.apelido !== undefined) patched.nickname = input.apelido.trim();
+  if (input.cpfCnpj !== undefined) patched.taxDocumentNumber = input.cpfCnpj.trim();
+  if (input.origem !== undefined) patched.clientOrigin = input.origem.trim();
+
+  if (input.site !== undefined) {
+    const sitesAtual = Array.isArray(patched.webSites)
+      ? [...(patched.webSites as Array<Record<string, unknown>>)]
+      : [];
+    if (sitesAtual.length > 0) {
+      sitesAtual[0] = { ...sitesAtual[0], url: input.site.trim() };
+    } else {
+      sitesAtual.push({ url: input.site.trim() });
+    }
+    patched.webSites = sitesAtual;
+  }
+
+  if (input.email !== undefined) {
+    const emailsAtual = Array.isArray(patched.emails)
+      ? [...(patched.emails as Array<Record<string, unknown>>)]
+      : [];
+    const novoEmail = input.email.trim();
+    if (emailsAtual.length > 0) {
+      emailsAtual[0] = { ...emailsAtual[0], address: novoEmail };
+    } else {
+      emailsAtual.push({ typeEnum: 'PERSONAL', address: novoEmail, valid: true });
+    }
+    patched.emails = emailsAtual;
+  }
+
+  if (input.telefone !== undefined) {
+    const fonesAtual = Array.isArray(patched.telephones)
+      ? [...(patched.telephones as Array<Record<string, unknown>>)]
+      : [];
+    const novoNumero = input.telefone.trim();
+    if (fonesAtual.length > 0) {
+      fonesAtual[0] = { ...fonesAtual[0], number: novoNumero };
+    } else {
+      fonesAtual.push({ typeEnum: 'PERSONAL_CELLULAR', number: novoNumero, operator: '' });
+    }
+    patched.telephones = fonesAtual;
+  }
+
+  if (input.endereco !== undefined) {
+    const enderecosAtual = Array.isArray(patched.addresses)
+      ? [...(patched.addresses as Array<Record<string, unknown>>)]
+      : [];
+    const baseAddr = enderecosAtual[0] ?? { typeEnum: 'HOME', countryCode: '76', countryName: 'Brasil' };
+    if (typeof input.endereco === 'string') {
+      enderecosAtual[0] = { ...baseAddr, street: input.endereco.trim() };
+    } else {
+      const e = input.endereco;
+      enderecosAtual[0] = {
+        ...baseAddr,
+        ...(e.cep !== undefined ? { zipCode: e.cep.trim() } : {}),
+        ...(e.logradouro !== undefined ? { street: e.logradouro.trim() } : {}),
+        ...(e.numero !== undefined ? { number: e.numero.trim() } : {}),
+        ...(e.complemento !== undefined ? { complement: e.complemento.trim() } : {}),
+        ...(e.bairro !== undefined ? { district: e.bairro.trim() } : {}),
+        ...(e.cidade !== undefined ? { city: e.cidade.trim() } : {}),
+        ...(e.estado !== undefined ? { state: e.estado.trim() } : {}),
+        ...(e.pais !== undefined ? { countryName: e.pais.trim() } : {}),
+      };
+    }
+    patched.addresses = enderecosAtual;
+  }
+
+  return patched;
+}
+
+export async function atualizarCliente(
+  id: string,
+  input: AtualizarClienteInput,
+): Promise<ServiceResponse<Cliente>> {
+  try {
+    const idTrim = id.trim();
+    if (!idTrim) {
+      return {
+        ok: false,
+        error: { message: 'id é obrigatório', code: 'VALIDATION_ERROR', retryable: false },
+      };
+    }
+
+    // Se input vier vazio, evita chamada desnecessária
+    const temAlgumCampo = Object.values(input).some((v) => v !== undefined);
+    if (!temAlgumCampo) {
+      return {
+        ok: false,
+        error: {
+          message: 'Pelo menos um campo deve ser informado para atualização',
+          code: 'VALIDATION_ERROR',
+          retryable: false,
+        },
+      };
+    }
+
+    await withBrowserContext(async (page) => {
+      // Garante que o app AngularJS está carregado para o $http funcionar com auth
+      await navigateTo(page, ANGULAR_PAGE_PATH);
+
+      // 1. Lê o estado atual do contato
+      const details = await astreaApiGet<AstreaContactDetails & Record<string, unknown>>(
+        page,
+        `${ASTREA_API}/contact/${idTrim}/details`,
+      ).catch((err: unknown) => {
+        if (err instanceof Error && err.message.includes('API_ERROR_404')) {
+          throw new Error('NOT_FOUND: Contato não encontrado');
+        }
+        throw err;
+      });
+
+      // 2. Normaliza para formato de write
+      const normalized = normalizeDetailsForSave(details);
+
+      // 3. Aplica os overrides do input
+      const payload = applyContactPatch(normalized, input);
+
+      // 4. Envia para /save (full replace)
+      const response = await astreaApiPost<AstreaSaveContactResponse>(
+        page,
+        `${ASTREA_API}/contact/save`,
+        payload,
+      );
+
+      if (response.response == null || response.response === 'NOT_OK') {
+        throw new Error(
+          `API_ERROR: ${response.errorMessage || 'Astrea retornou erro ao salvar o contato'}`,
+        );
+      }
+    });
+
+    return await buscarCliente(idTrim);
+  } catch (err) {
+    logger.error({ err, id, input }, 'Erro em atualizarCliente');
+    const msg = err instanceof Error ? err.message : 'Erro desconhecido';
+    const code = msg.startsWith('NOT_FOUND')
+      ? 'NOT_FOUND'
+      : msg.startsWith('VALIDATION_ERROR')
+        ? 'VALIDATION_ERROR'
+        : 'API_ERROR';
+    return {
+      ok: false,
+      error: {
+        message: msg.replace(/^(NOT_FOUND|VALIDATION_ERROR|API_ERROR):\s*/, ''),
+        code,
         retryable: isRetryablePlaywrightError(err),
       },
     };

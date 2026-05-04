@@ -32,6 +32,7 @@ export type {
   Cliente,
   ClienteResumido,
   CriarClienteInput,
+  AtualizarClienteInput,
   EnderecoCriacaoClienteInput,
   PerfilContato,
   TipoContato,

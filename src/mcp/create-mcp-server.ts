@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
 import {
+  atualizarCliente,
   criarCliente,
   listarClientes,
   buscarCliente as buscarClientePorId,
@@ -140,6 +141,48 @@ export function createMcpServer(): McpServer {
     },
     async (input) => {
       const result = await criarCliente(input);
+      if (!result.ok) {
+        return {
+          content: [{ type: 'text', text: `Erro: ${result.error.message}` }],
+          isError: true,
+        };
+      }
+      const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
+      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
+    },
+  );
+
+  server.tool(
+    'atualizar_cliente',
+    'Atualiza parcialmente o cadastro de um cliente/contato no Astrea. Apenas os campos informados são alterados — os demais ficam intactos. Útil para corrigir typos no nome, atualizar telefone/email/endereço, etc. Não permite alterar perfil/tipo (cliente vs contato, pessoa física vs jurídica) — para isso, use a UI do Astrea.',
+    {
+      id: z.string().describe('ID do cliente no Astrea'),
+      nome: z.string().min(1).optional(),
+      apelido: z.string().optional(),
+      cpfCnpj: z.string().optional(),
+      origem: z.string().optional(),
+      site: z.string().optional(),
+      email: z.string().optional(),
+      telefone: z.string().optional(),
+      endereco: z
+        .union([
+          z.string(),
+          z.object({
+            cep: z.string().optional(),
+            logradouro: z.string().optional(),
+            numero: z.string().optional(),
+            complemento: z.string().optional(),
+            bairro: z.string().optional(),
+            cidade: z.string().optional(),
+            estado: z.string().optional(),
+            pais: z.string().optional(),
+          }),
+        ])
+        .optional(),
+    },
+    async (input) => {
+      const { id, ...patch } = input;
+      const result = await atualizarCliente(id, patch);
       if (!result.ok) {
         return {
           content: [{ type: 'text', text: `Erro: ${result.error.message}` }],

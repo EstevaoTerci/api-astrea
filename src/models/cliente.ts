@@ -64,3 +64,19 @@ export interface CriarClienteInput {
   telefone?: string;
   endereco?: string | EnderecoCriacaoClienteInput;
 }
+
+/**
+ * Patch parcial sobre um contato existente. Campos não passados ficam
+ * inalterados — o service lê o estado atual via /details e só sobrescreve
+ * o que vier no input antes de enviar para /contact/save.
+ */
+export interface AtualizarClienteInput {
+  nome?: string;
+  apelido?: string;
+  cpfCnpj?: string;
+  origem?: string;
+  site?: string;
+  email?: string;
+  telefone?: string;
+  endereco?: string | EnderecoCriacaoClienteInput;
+}

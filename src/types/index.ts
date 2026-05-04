@@ -3,6 +3,7 @@ export type {
   Cliente,
   ClienteResumido,
   CriarClienteInput,
+  AtualizarClienteInput,
   Caso,
   ProcessoResumido,
   Processo,
