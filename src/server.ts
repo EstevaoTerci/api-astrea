@@ -94,12 +94,6 @@ async function start(): Promise<void> {
       );
     });
 
-    // Evita que requests pendurados (saveCase/saveLawsuit lentos) retenham
-    // slots do browser pool indefinidamente. 120s acomoda mutations + retries
-    // internos com folga, sem encalhar conexões TCP.
-    server.requestTimeout = 120_000;
-    server.headersTimeout = 125_000;
-
     // ─────────────────────────────────────────────────────────────────────────
     // Graceful shutdown
     // ─────────────────────────────────────────────────────────────────────────
