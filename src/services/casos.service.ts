@@ -1,15 +1,24 @@
 import { Page } from 'playwright';
-import { withBrowserContext } from '../browser/astrea-http.js';
+import {
+  astreaGapiGet,
+  astreaGapiPost,
+  getAstreaUserId as getUserIdFromHelper,
+  withBrowserContext,
+} from '../browser/astrea-http.js';
 import { navigateTo } from '../browser/navigator.js';
 import { isRetryablePlaywrightError } from '../utils/retry.js';
 import { logger } from '../utils/logger.js';
 import { urlCaso, urlContato } from '../utils/astrea-urls.js';
+import { buscarCliente } from './clientes.service.js';
 import type {
   CasoProcesso,
   ParteProcesso,
   HistoricoItem,
   ApensoProcesso,
   Caso,
+  CompartilhamentoCaso,
+  CriarCasoInput,
+  CriarProcessoInput,
 } from '../models/index.js';
 import type { FiltrosCaso, ServiceResponse, PaginationMeta } from '../types/index.js';
 
@@ -675,6 +684,256 @@ export async function buscarCasosPorCliente(
         message: err instanceof Error ? err.message : 'Erro desconhecido',
         code: isNotFound ? 'NOT_FOUND' : 'SCRAPE_ERROR',
         retryable: !isNotFound && isRetryablePlaywrightError(err),
+      },
+    };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Service: criarCaso / criarProcesso  –  Cadastro direto (sem atendimento)
+//
+// POST /api/casos
+// POST /api/casos/processo
+//
+// Usa o endpoint GAPI `_ah/api/folders/v1/saveCase` (CTE_CASE) ou `saveLawsuit`
+// (CTE_LAWSUIT). Não depende de DOM scraping nem state navigation Angular.
+// Estrutura do payload validada via captura em 2026-05-11 — veja
+// `memory/reference_astrea_savecase.md`.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SHARING_TYPE_MAP_DIRECT: Record<CompartilhamentoCaso, number> = {
+  publico: 0,
+  privado: 1,
+  equipe: 2,
+};
+
+const DEFAULT_PROCESSO_PAPEL_CLIENTE = 'Autor';
+
+interface AstreaFolderSaveDirectResponse {
+  folder?: { id?: string | number };
+  response?:
+    | string
+    | { id?: string | number; title?: string; number?: string; type?: string };
+}
+
+function todayCreateDate(): string {
+  // Astrea registra a data de criação como meia-noite local em UTC. Em São Paulo
+  // (BRT, UTC-3), meia-noite local = 03:00 UTC do mesmo dia.
+  const now = new Date();
+  const localMidnight = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 3, 0, 0, 0),
+  );
+  return localMidnight.toISOString();
+}
+
+function normalizeDistribuidoEm(value?: string): string | undefined {
+  if (!value) return undefined;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const [year, month, day] = value.split('-');
+    return `${day}/${month}/${year}`;
+  }
+  return value;
+}
+
+async function resolveClienteParaPayload(
+  cliente: string,
+): Promise<{ id: string; nome: string }> {
+  const result = await buscarCliente(cliente);
+  if (!result.ok) {
+    throw new Error(
+      result.error.code === 'NOT_FOUND'
+        ? 'NOT_FOUND: Cliente não encontrado'
+        : `API_ERROR: ${result.error.message}`,
+    );
+  }
+  return { id: result.data.id, nome: result.data.nome };
+}
+
+export async function criarCaso(input: CriarCasoInput): Promise<ServiceResponse<CasoProcesso>> {
+  try {
+    const clienteResolvido = await resolveClienteParaPayload(input.cliente);
+
+    const folderId = await withBrowserContext(async (page) => {
+      await navigateTo(page, ANGULAR_PAGE_PATH);
+      const userId = input.responsavelId || (await getUserIdFromHelper(page));
+
+      const sharingType = SHARING_TYPE_MAP_DIRECT[input.sharingType ?? 'publico'];
+      const isPrivateOrTeam = sharingType !== SHARING_TYPE_MAP_DIRECT.publico;
+
+      const payload: Record<string, any> = {
+        title: input.titulo,
+        caseType: 'CTE_CASE',
+        status: 'Active',
+        createDate: todayCreateDate(),
+        sharingType,
+        owner: isPrivateOrTeam ? userId : userId,
+        responsibleId: userId,
+        responsibleName: '',
+        customerId: null,
+        customers: [
+          {
+            main: true,
+            id: Number.isSafeInteger(Number(clienteResolvido.id))
+              ? Number(clienteResolvido.id)
+              : clienteResolvido.id,
+            name: clienteResolvido.nome,
+            customerValid: true,
+          },
+        ],
+        stakeholders: [
+          { mainStakeholder: true, contactError: false, stakeholderRoleError: false },
+        ],
+        permissions: [{ userId: null, userName: '', permission: '0' }],
+        permissionByUser: [[userId, 0]],
+        tags: input.tagsIds ?? [],
+        fromConsulting: '',
+        team: null,
+      };
+
+      if (input.descricao != null) payload.description = input.descricao;
+      if (input.observacoes != null) payload.observation = input.observacoes;
+      if (input.teamId) {
+        payload.teamId = input.teamId;
+      }
+
+      const result = await astreaGapiPost<AstreaFolderSaveDirectResponse>(
+        page,
+        `/folders/v1/saveCase?userId=${encodeURIComponent(userId)}&alt=json`,
+        payload,
+        60_000,
+      );
+
+      const responseObj = typeof result.response === 'object' ? result.response : undefined;
+      const createdId = result.folder?.id ?? responseObj?.id;
+      if (!createdId) {
+        throw new Error('API_ERROR: Astrea não retornou folder.id após criação do caso');
+      }
+      return String(createdId);
+    });
+
+    return await buscarCaso(folderId);
+  } catch (err) {
+    logger.error({ err }, 'Erro em criarCaso');
+    const isNotFound = err instanceof Error && err.message.includes('NOT_FOUND');
+    const isValidation = err instanceof Error && err.message.includes('VALIDATION_ERROR');
+    return {
+      ok: false,
+      error: {
+        message:
+          err instanceof Error
+            ? err.message.replace(/^(NOT_FOUND|API_ERROR|VALIDATION_ERROR):\s*/, '')
+            : 'Erro desconhecido',
+        code: isNotFound ? 'NOT_FOUND' : isValidation ? 'VALIDATION_ERROR' : 'API_ERROR',
+        retryable: !isNotFound && !isValidation && isRetryablePlaywrightError(err),
+      },
+    };
+  }
+}
+
+export async function criarProcesso(
+  input: CriarProcessoInput,
+): Promise<ServiceResponse<CasoProcesso>> {
+  try {
+    const clienteResolvido = await resolveClienteParaPayload(input.cliente);
+
+    const folderId = await withBrowserContext(async (page) => {
+      await navigateTo(page, ANGULAR_PAGE_PATH);
+      const userId = input.responsavelId || (await getUserIdFromHelper(page));
+
+      // 1. Resolve a role do cliente (Autor por default).
+      const papelNome = input.papelCliente ?? DEFAULT_PROCESSO_PAPEL_CLIENTE;
+      const role = await astreaGapiGet<{ id?: string | number; name?: string }>(
+        page,
+        `/folders/v1/getStakeholderRoleByName?name=${encodeURIComponent(papelNome)}`,
+      );
+      if (!role?.id) {
+        throw new Error(`VALIDATION_ERROR: Papel "${papelNome}" não encontrado no Astrea`);
+      }
+
+      const sharingType = SHARING_TYPE_MAP_DIRECT[input.sharingType ?? 'publico'];
+
+      const payload: Record<string, any> = {
+        title: input.titulo,
+        caseType: 'CTE_LAWSUIT',
+        status: 'Active',
+        createDate: todayCreateDate(),
+        sharingType,
+        owner: userId,
+        responsibleId: userId,
+        responsibleName: '',
+        currentInstanceNumber: input.instancia ?? 1,
+        isFromFolder: true,
+        customerId: null,
+        customers: [
+          {
+            main: true,
+            id: Number.isSafeInteger(Number(clienteResolvido.id))
+              ? Number(clienteResolvido.id)
+              : clienteResolvido.id,
+            name: clienteResolvido.nome,
+            roleName: role.name ?? papelNome,
+            role: String(role.id),
+            customerRoleValid: true,
+          },
+        ],
+        stakeholders: [],
+        permissions: [{ userId: null, userName: '', permission: '0' }],
+        permissionByUser: [[userId, 0]],
+        lawsuit: {
+          instanceNumber: input.instancia ?? 1,
+          lawsuitNumber: input.numeroProcesso ?? '',
+        },
+        tags: input.tagsIds ?? [],
+        fromConsulting: '',
+        team: null,
+      };
+
+      // Campos opcionais do processo
+      const lawsuit = payload.lawsuit as Record<string, any>;
+      if (input.juizoNumero != null) lawsuit.divisionNumber = input.juizoNumero;
+      if (input.vara != null) lawsuit.divisionName = input.vara;
+      if (input.foro != null) lawsuit.courtName = input.foro;
+      if (input.acao != null) lawsuit.lawsuitTypeName = input.acao;
+      if (input.distribuidoEm != null) lawsuit.openDate = normalizeDistribuidoEm(input.distribuidoEm);
+
+      if (input.urlTribunal != null) payload.urlProcesso = input.urlTribunal;
+      if (input.objeto != null) payload.description = input.objeto;
+      if (input.valorCausa != null) payload.amount = input.valorCausa;
+      if (input.valorCondenacao != null) payload.convictionAmount = input.valorCondenacao;
+      if (input.observacoes != null) payload.observation = input.observacoes;
+      if (input.descricao != null && payload.description == null)
+        payload.description = input.descricao;
+      if (input.teamId) payload.teamId = input.teamId;
+
+      const result = await astreaGapiPost<AstreaFolderSaveDirectResponse>(
+        page,
+        `/folders/v1/saveLawsuit?userId=${encodeURIComponent(userId)}&alt=json`,
+        payload,
+        60_000,
+      );
+
+      const responseObj = typeof result.response === 'object' ? result.response : undefined;
+      const createdId = result.folder?.id ?? responseObj?.id;
+      if (!createdId) {
+        throw new Error('API_ERROR: Astrea não retornou folder.id após criação do processo');
+      }
+      return String(createdId);
+    });
+
+    return await buscarCaso(folderId);
+  } catch (err) {
+    logger.error({ err }, 'Erro em criarProcesso');
+    const isNotFound = err instanceof Error && err.message.includes('NOT_FOUND');
+    const isValidation = err instanceof Error && err.message.includes('VALIDATION_ERROR');
+    return {
+      ok: false,
+      error: {
+        message:
+          err instanceof Error
+            ? err.message.replace(/^(NOT_FOUND|API_ERROR|VALIDATION_ERROR):\s*/, '')
+            : 'Erro desconhecido',
+        code: isNotFound ? 'NOT_FOUND' : isValidation ? 'VALIDATION_ERROR' : 'API_ERROR',
+        retryable: !isNotFound && !isValidation && isRetryablePlaywrightError(err),
       },
     };
   }

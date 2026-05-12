@@ -26,6 +26,8 @@ export type {
   AtividadePendente,
   ValorProcesso,
   ApensoProcesso,
+  CriarCasoInput,
+  CriarProcessoInput,
 } from './caso-processo.js';
 
 export type {

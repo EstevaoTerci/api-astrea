@@ -8,7 +8,12 @@ import {
   buscarCliente as buscarClientePorId,
   listarTodosClientes,
 } from '../services/clientes.service.js';
-import { buscarCaso as buscarCasoPorId, buscarCasosPorCliente } from '../services/casos.service.js';
+import {
+  buscarCaso as buscarCasoPorId,
+  buscarCasosPorCliente,
+  criarCaso,
+  criarProcesso,
+} from '../services/casos.service.js';
 import {
   listarTarefas,
   criarTarefa,
@@ -533,6 +538,70 @@ export function createMcpServer(): McpServer {
     async (input) => {
       const { atendimentoId, ...payload } = input;
       const result = await transformarAtendimentoEmProcesso(atendimentoId, payload);
+      if (!result.ok) {
+        return {
+          content: [{ type: 'text', text: `Erro: ${result.error.message}` }],
+          isError: true,
+        };
+      }
+      const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
+      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
+    },
+  );
+
+  server.tool(
+    'criar_caso',
+    'Cria um caso direto (sem passar por atendimento). Identifique o cliente por ID numérico, nome ou CPF — busca textual usa o primeiro match. Para cadastrar um processo judicial use `criar_processo`.',
+    {
+      cliente: z.string().describe('ID, nome ou CPF do cliente'),
+      titulo: z.string().describe('Título do caso'),
+      descricao: z.string().optional(),
+      observacoes: z.string().optional(),
+      responsavelId: z.string().optional(),
+      sharingType: z.enum(['publico', 'privado', 'equipe']).optional(),
+      tagsIds: z.array(z.string()).optional(),
+      teamId: z.string().optional(),
+    },
+    async (input) => {
+      const result = await criarCaso(input);
+      if (!result.ok) {
+        return {
+          content: [{ type: 'text', text: `Erro: ${result.error.message}` }],
+          isError: true,
+        };
+      }
+      const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
+      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
+    },
+  );
+
+  server.tool(
+    'criar_processo',
+    'Cria um processo judicial direto (sem passar por atendimento). Identifique o cliente por ID, nome ou CPF. Papel do cliente default é "Autor"; passe `papelCliente` para sobrescrever.',
+    {
+      cliente: z.string().describe('ID, nome ou CPF do cliente'),
+      titulo: z.string().describe('Título do processo'),
+      descricao: z.string().optional(),
+      observacoes: z.string().optional(),
+      responsavelId: z.string().optional(),
+      sharingType: z.enum(['publico', 'privado', 'equipe']).optional(),
+      tagsIds: z.array(z.string()).optional(),
+      teamId: z.string().optional(),
+      numeroProcesso: z.string().optional(),
+      instancia: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]).optional(),
+      juizoNumero: z.string().optional(),
+      vara: z.string().optional(),
+      foro: z.string().optional(),
+      acao: z.string().optional(),
+      urlTribunal: z.string().optional(),
+      objeto: z.string().optional(),
+      valorCausa: z.number().optional(),
+      distribuidoEm: z.string().optional(),
+      valorCondenacao: z.number().optional(),
+      papelCliente: z.string().optional(),
+    },
+    async (input) => {
+      const result = await criarProcesso(input);
       if (!result.ok) {
         return {
           content: [{ type: 'text', text: `Erro: ${result.error.message}` }],

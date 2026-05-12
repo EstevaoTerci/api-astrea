@@ -7,6 +7,13 @@ import { logger } from '../utils/logger.js';
 export const ASTREA_API = 'https://app.astrea.net.br/api/v2';
 
 /**
+ * Base URL dos endpoints GCP Cloud Endpoints (folders/v1, workspace/v1, users/v1).
+ * Usar em conjunto com `astreaGapiPost`/`astreaGapiGet` para chamar saveCase,
+ * saveLawsuit, getCaseById sem precisar carregar `gapi.client.folders` no DOM.
+ */
+export const ASTREA_GAPI = 'https://app.astrea.net.br/_ah/api';
+
+/**
  * Rota Angular que carrega o AngularJS com gapi.client inicializado.
  * Usada antes de qualquer chamada à API REST ou GCP Endpoints.
  */
@@ -179,6 +186,86 @@ export async function astreaApiDelete<T>(page: Page, path: string): Promise<T> {
       throw new Error(`API_ERROR_${status}: ${detail}`);
     }
   }, `${ASTREA_API}${path}`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GCP Endpoints — REST via $http (sem depender de gapi.client carregado)
+//
+// Usar para endpoints /_ah/api/<service>/v1/<method>. Os interceptors do
+// AngularJS injetam Authorization: Bearer <sessionId> automaticamente, então
+// nenhuma rota Angular específica precisa estar montada (ao contrário do
+// gapi.client.folders, que só carrega depois de visitar /main/folders/*).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** GET para um endpoint GCP Cloud Endpoints do Astrea via Angular $http. */
+export async function astreaGapiGet<T>(
+  page: Page,
+  path: string,
+  timeoutMs = 30_000,
+): Promise<T> {
+  const url = path.startsWith('http') ? path : `${ASTREA_GAPI}${path}`;
+  return page.evaluate(
+    async ({ url, timeoutMs }: { url: string; timeoutMs: number }) => {
+      const http = (window as any).angular?.element(document.body)?.injector()?.get('$http');
+      if (!http) throw new Error('Angular $http não disponível');
+
+      const reqPromise = (async () => {
+        try {
+          const res = await http.get(url);
+          return res.data as T;
+        } catch (err: any) {
+          const status = err?.status ?? 'UNKNOWN';
+          const rawMessage =
+            err?.data?.errorMessage ?? err?.data ?? err?.message ?? err?.statusText ?? err;
+          const detail = typeof rawMessage === 'string' ? rawMessage : JSON.stringify(rawMessage);
+          throw new Error(`API_ERROR_${status}: ${detail}`);
+        }
+      })();
+
+      const timeoutPromise = new Promise<T>((_, reject) =>
+        setTimeout(() => reject(new Error(`Timeout ${timeoutMs}ms em GET ${url}`)), timeoutMs),
+      );
+
+      return Promise.race([reqPromise, timeoutPromise]);
+    },
+    { url, timeoutMs },
+  );
+}
+
+/** POST para um endpoint GCP Cloud Endpoints do Astrea via Angular $http. */
+export async function astreaGapiPost<T>(
+  page: Page,
+  path: string,
+  body: unknown,
+  timeoutMs = 60_000,
+): Promise<T> {
+  const url = path.startsWith('http') ? path : `${ASTREA_GAPI}${path}`;
+  return page.evaluate(
+    async ({ url, body, timeoutMs }: { url: string; body: unknown; timeoutMs: number }) => {
+      const http = (window as any).angular?.element(document.body)?.injector()?.get('$http');
+      if (!http) throw new Error('Angular $http não disponível');
+
+      const reqPromise = (async () => {
+        try {
+          const res = await http.post(url, body);
+          return res.data as T;
+        } catch (err: any) {
+          const status = err?.status ?? 'UNKNOWN';
+          const rawMessage =
+            err?.data?.errorMessage ?? err?.data ?? err?.message ?? err?.statusText ?? err;
+          const detail = typeof rawMessage === 'string' ? rawMessage : JSON.stringify(rawMessage);
+          throw new Error(`API_ERROR_${status}: ${detail}`);
+        }
+      })();
+
+      const timeoutPromise = new Promise<T>((_, reject) =>
+        setTimeout(() => reject(new Error(`Timeout ${timeoutMs}ms em POST ${url}`)), timeoutMs),
+      );
+
+      return Promise.race([reqPromise, timeoutPromise]);
+    },
+    { url, body, timeoutMs },
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

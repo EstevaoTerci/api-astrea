@@ -277,3 +277,68 @@ export interface CasoProcesso {
   /** Número de atendimentos associados ao caso */
   totalAtendimentos?: number;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Inputs de criação direta (sem passar por atendimento)
+// ─────────────────────────────────────────────────────────────────────────────
+
+import type { CompartilhamentoCaso } from './atendimento.js';
+
+/**
+ * Entrada para criar um caso direto via `POST /api/casos`.
+ *
+ * O cliente pode ser identificado por ID numérico do Astrea, nome ou CPF.
+ * Em produção, prefira passar o ID — buscas textuais podem trazer múltiplos
+ * resultados e o sistema usa o primeiro.
+ */
+export interface CriarCasoInput {
+  /** ID, nome ou CPF do cliente. Resolvido via `buscarCliente`. */
+  cliente: string;
+  /** Título do caso. */
+  titulo: string;
+  /** Descrição livre. */
+  descricao?: string;
+  /** Observações internas. */
+  observacoes?: string;
+  /** ID do responsável. Default: usuário autenticado. */
+  responsavelId?: string;
+  /** Tipo de compartilhamento. Default: 'publico'. */
+  sharingType?: CompartilhamentoCaso;
+  /** IDs de tags/etiquetas a aplicar. */
+  tagsIds?: string[];
+  /** ID da equipe (quando sharingType=equipe). */
+  teamId?: string;
+}
+
+/**
+ * Entrada para criar um processo direto via `POST /api/casos/processo`.
+ *
+ * Estende `CriarCasoInput` com os campos processuais. O papel do cliente
+ * default é "Autor"; passe `papelCliente` para sobrescrever.
+ */
+export interface CriarProcessoInput extends CriarCasoInput {
+  /** Número CNJ do processo. */
+  numeroProcesso?: string;
+  /** Instância processual. Default: 1. */
+  instancia?: 1 | 2 | 3 | 4;
+  /** Número do juízo (campo Nº ao lado da Vara). */
+  juizoNumero?: string;
+  /** Nome da vara (ex: "1ª vara cível"). */
+  vara?: string;
+  /** Nome do foro/comarca. */
+  foro?: string;
+  /** Tipo de ação (ex: "Ação de Cobrança"). */
+  acao?: string;
+  /** Link do processo no tribunal. */
+  urlTribunal?: string;
+  /** Objeto do processo. */
+  objeto?: string;
+  /** Valor da causa. */
+  valorCausa?: number;
+  /** Data de distribuição (YYYY-MM-DD ou DD/MM/YYYY). */
+  distribuidoEm?: string;
+  /** Valor da condenação. */
+  valorCondenacao?: number;
+  /** Papel do cliente no processo. Default: 'Autor'. */
+  papelCliente?: string;
+}

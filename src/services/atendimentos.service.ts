@@ -3,7 +3,8 @@ import {
   ANGULAR_PAGE_PATH,
   astreaApiGet,
   astreaApiPost,
-  gapiCall,
+  astreaGapiGet,
+  astreaGapiPost,
   getAstreaUserId,
   withBrowserContext,
 } from '../browser/astrea-http.js';
@@ -82,12 +83,9 @@ interface ApiContactSummary {
 
 interface AstreaFolderSaveResponse {
   folder?: { id?: string | number };
-  response?: { id?: string | number; title?: string; number?: string };
-}
-
-interface AstreaCaseFormData {
-  caseData: Record<string, any>;
-  selectedTagIds: string[];
+  response?:
+    | string
+    | { id?: string | number; title?: string; number?: string; type?: string };
 }
 
 type ConversionMode = 'case' | 'lawsuit';
@@ -268,68 +266,21 @@ async function resolveCaseAttachment(
   };
 }
 
-async function goToAngularState(
+/**
+ * Busca o payload-snapshot do atendimento como `getCaseById` retorna.
+ * Esse mesmo payload é o ponto de partida para `saveCase`/`saveLawsuit` em
+ * modo conversão — basta trocar `fromConsulting` de `false` para `"true"`
+ * e aplicar overrides do usuário antes do POST.
+ */
+async function fetchAtendimentoCasePayload(
   page: Page,
-  stateName: string,
-  params: Record<string, unknown>,
-): Promise<void> {
-  await page.evaluate(
-    async ({ stateName, params }) => {
-      const injector = (window as any).angular?.element(document.body)?.injector?.();
-      const $state = injector?.get('$state');
-      if (!$state) throw new Error('STATE_UNAVAILABLE: Angular $state não disponível');
-      await $state.go(stateName, params);
-    },
-    { stateName, params },
+  atendimentoId: string,
+  userId: string,
+): Promise<Record<string, any>> {
+  return astreaGapiGet<Record<string, any>>(
+    page,
+    `/folders/v1/getCaseById?id=${encodeURIComponent(atendimentoId)}&userId=${encodeURIComponent(userId)}`,
   );
-}
-
-async function waitForConversionForm(page: Page, mode: ConversionMode): Promise<void> {
-  const selector =
-    mode === 'case'
-      ? '#case-add-edit'
-      : 'button[ng-click="save(myform.$invalid)"], button[ng-click="save(myForm.$invalid)"]';
-
-  await page.waitForSelector(selector, { timeout: 15_000 });
-  await page.waitForFunction(
-    (targetMode) => {
-      const selector =
-        targetMode === 'case'
-          ? '#case-add-edit'
-          : 'button[ng-click="save(myform.$invalid)"], button[ng-click="save(myForm.$invalid)"]';
-      const saveBtn = document.querySelector(selector);
-      const ng = (window as any).angular;
-      const scope = saveBtn ? ng?.element(saveBtn)?.scope?.() : null;
-      const ctrl = scope?.$ctrl ?? scope;
-      return !!ctrl?.case;
-    },
-    mode,
-    { timeout: 15_000 },
-  );
-}
-
-async function extractCaseFormData(page: Page, mode: ConversionMode): Promise<AstreaCaseFormData> {
-  return page.evaluate((targetMode) => {
-    const selector =
-      targetMode === 'case'
-        ? '#case-add-edit'
-        : 'button[ng-click="save(myform.$invalid)"], button[ng-click="save(myForm.$invalid)"]';
-    const saveBtn = document.querySelector(selector);
-    if (!saveBtn) throw new Error('FORM_UNAVAILABLE: botão de salvar não encontrado');
-
-    const ng = (window as any).angular;
-    const scope = ng?.element(saveBtn)?.scope?.();
-    const ctrl = scope?.$ctrl ?? scope;
-    if (!ctrl?.case) throw new Error('FORM_UNAVAILABLE: payload do formulário não encontrado');
-
-    const caseData = JSON.parse(JSON.stringify(ctrl.case));
-    const selectedTagIds = (ctrl.tagsToSelect ?? [])
-      .filter((tag: { selected?: boolean }) => tag.selected)
-      .map((tag: { id?: string | number }) => String(tag.id ?? ''))
-      .filter(Boolean);
-
-    return { caseData, selectedTagIds };
-  }, mode);
 }
 
 function normalizeDateInput(value?: string): string | undefined {
@@ -430,11 +381,9 @@ async function ensurePrimaryCustomerRole(
 
   if (hasRole) return payload;
 
-  const role = await gapiCall<Record<string, any>>(
+  const role = await astreaGapiGet<{ id?: string | number; name?: string; type?: string | number }>(
     page,
-    'folders.caseService',
-    'getStakeholderRoleByName',
-    { name: DEFAULT_LAWSUIT_CUSTOMER_ROLE },
+    `/folders/v1/getStakeholderRoleByName?name=${encodeURIComponent(DEFAULT_LAWSUIT_CUSTOMER_ROLE)}`,
   );
 
   if (!role?.id) {
@@ -446,6 +395,7 @@ async function ensurePrimaryCustomerRole(
     role: String(role.id),
     roleId: String(role.id),
     roleName: role.name ?? DEFAULT_LAWSUIT_CUSTOMER_ROLE,
+    customerRoleValid: true,
     ...(role.type != null ? { roleType: String(role.type) } : {}),
   };
 
@@ -455,6 +405,30 @@ async function ensurePrimaryCustomerRole(
   };
 }
 
+/**
+ * Reconcilia uma transformação após timeout: como o caso/processo herda o ID
+ * do atendimento, basta verificar se o folder já existe e não é mais consulting.
+ * Retorna o folder.id se reconciliado ou null se a operação ainda não efetivou.
+ */
+async function reconcileTransformation(
+  page: Page,
+  atendimentoId: string,
+  userId: string,
+): Promise<string | null> {
+  try {
+    const folder = await astreaApiGet<{ caseType?: string; id?: string | number }>(
+      page,
+      `/folder/${encodeURIComponent(atendimentoId)}?userId=${encodeURIComponent(userId)}&withDetails=true`,
+    );
+    if (folder?.caseType && folder.caseType !== 'CTE_CONSULTING') {
+      return String(folder.id ?? atendimentoId);
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 async function convertAtendimento(
   atendimentoId: string,
   mode: ConversionMode,
@@ -462,50 +436,87 @@ async function convertAtendimento(
 ): Promise<ServiceResponse<CasoProcesso>> {
   try {
     const folderId = await withBrowserContext(async (page) => {
+      // Apenas garante que o Angular está carregado para que `$http` exista e
+      // os interceptors injetem o token de sessão nas chamadas REST/GAPI.
       await navigateTo(page, ANGULAR_PAGE_PATH);
-
       const userId = await getAstreaUserId(page);
-      const stateName =
-        mode === 'case' ? 'main.folders-case-add-edit' : 'main.folders-lawsuit-add-edit';
-      const stateParams =
-        mode === 'case'
-          ? { id: atendimentoId, fromConsulting: true, folderDetail: true }
-          : {
-              id: atendimentoId,
-              turnIntoLawsuit: true,
-              fromConsulting: true,
-              folderDetail: true,
-            };
 
-      await goToAngularState(page, stateName, stateParams);
-      await waitForConversionForm(page, mode);
+      // Idempotência: se a conversão já efetivou em uma tentativa anterior
+      // (timeout, retry do consumidor), o folder já existe com o mesmo ID
+      // do atendimento e caseType !== CTE_CONSULTING.
+      const reconciledId = await reconcileTransformation(page, atendimentoId, userId);
+      if (reconciledId) {
+        logger.info(
+          { atendimentoId, mode, reconciledId },
+          'Conversão já efetivada anteriormente — pulando saveCase/saveLawsuit',
+        );
+        return reconciledId;
+      }
 
-      const { caseData, selectedTagIds } = await extractCaseFormData(page, mode);
-      const commonPayload = applyCommonCaseOverrides(caseData, input, selectedTagIds, userId);
+      // 1. Buscar payload-snapshot do atendimento (mesma rota usada pelo form Angular).
+      const basePayload = await fetchAtendimentoCasePayload(page, atendimentoId, userId);
+
+      // 2. Aplicar overrides do usuário em cima do snapshot.
+      const fallbackTagIds = Array.isArray(basePayload.tags)
+        ? basePayload.tags
+            .map((t: any) => String(t?.id ?? t ?? ''))
+            .filter((s: string) => s.length > 0)
+        : [];
+      const commonPayload = applyCommonCaseOverrides(basePayload, input, fallbackTagIds, userId);
       const payloadWithModeOverrides =
         mode === 'lawsuit'
           ? applyLawsuitOverrides(commonPayload, input as TransformarAtendimentoEmProcessoInput)
           : commonPayload;
-      const finalPayload =
+      const enrichedPayload =
         mode === 'lawsuit'
           ? await ensurePrimaryCustomerRole(page, payloadWithModeOverrides)
           : payloadWithModeOverrides;
 
+      // 3. O Angular envia `result` com snapshot do estado pré-edit. Replicar
+      // pra manter paridade com o payload original (verificado em captura).
+      const finalPayload = {
+        ...enrichedPayload,
+        result: basePayload,
+      };
+
+      // 4. POST saveCase ou saveLawsuit com timeout estendido (mutation pesada).
       const method = mode === 'case' ? 'saveCase' : 'saveLawsuit';
-      const result = await gapiCall<AstreaFolderSaveResponse>(
-        page,
-        'folders.caseService',
-        method,
-        { userId },
-        finalPayload,
-      );
+      try {
+        const result = await astreaGapiPost<AstreaFolderSaveResponse>(
+          page,
+          `/folders/v1/${method}?userId=${encodeURIComponent(userId)}&alt=json`,
+          finalPayload,
+          60_000,
+        );
 
-      const createdFolderId = result.folder?.id ?? result.response?.id;
-      if (!createdFolderId) {
-        throw new Error('API_ERROR: Astrea não retornou folder.id após conversão');
+        const responseObj = typeof result.response === 'object' ? result.response : undefined;
+        const createdFolderId = result.folder?.id ?? responseObj?.id;
+        if (!createdFolderId) {
+          throw new Error('API_ERROR: Astrea não retornou folder.id após conversão');
+        }
+        return String(createdFolderId);
+      } catch (saveErr) {
+        // Timeout/erro durante o save: tentar reconciliar. Como a conversão é
+        // in-place (caso/processo herda ID do atendimento), uma simples leitura
+        // do folder revela se a operação efetivou no Astrea.
+        const isTimeout =
+          saveErr instanceof Error && saveErr.message.toLowerCase().includes('timeout');
+        if (!isTimeout) throw saveErr;
+
+        logger.warn(
+          { atendimentoId, mode, err: String(saveErr) },
+          'Timeout em saveCase/saveLawsuit — tentando reconciliar...',
+        );
+        const reconciled = await reconcileTransformation(page, atendimentoId, userId);
+        if (reconciled) {
+          logger.info(
+            { atendimentoId, mode, reconciled },
+            'Reconciliação após timeout: caso/processo já existe no Astrea',
+          );
+          return reconciled;
+        }
+        throw saveErr;
       }
-
-      return String(createdFolderId);
     });
 
     return await buscarCaso(folderId);
