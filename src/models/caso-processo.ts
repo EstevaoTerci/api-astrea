@@ -278,6 +278,30 @@ export interface CasoProcesso {
   totalAtendimentos?: number;
 }
 
+/**
+ * Item resumido de listagem de casos/processos do escritório.
+ * Retornado por `listarProcessos` — enumeração leve para audit / cruzamentos
+ * (ex.: detectar candidatos a vinculação cliente↔processo).
+ */
+export interface ProcessoResumo {
+  /** ID numérico do caso/processo no Astrea. */
+  id: string;
+  /** Título do caso/processo. */
+  titulo: string;
+  /** Número CNJ — apenas quando `tipo === 'processo'`. */
+  numeroProcesso?: string;
+  /** Nome do cliente principal (parte `main: true` dos customers). */
+  clientePrincipalNome?: string;
+  /** Nome do responsável (advogado). */
+  responsavelNome?: string;
+  /** "caso" ou "processo" conforme a flag `isLawsuit` do Astrea. */
+  tipo: 'caso' | 'processo';
+  /** Status traduzido ("Ativo", "Encerrado", "Arquivado", "Suspenso"). */
+  status?: string;
+  /** URL direta do caso/processo no app do Astrea. */
+  url: string;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Inputs de criação direta (sem passar por atendimento)
 // ─────────────────────────────────────────────────────────────────────────────

@@ -13,6 +13,8 @@ import {
   buscarCasosPorCliente,
   criarCaso,
   criarProcesso,
+  listarProcessos,
+  vincularClienteCaso,
 } from '../services/casos.service.js';
 import {
   listarTarefas,
@@ -208,6 +210,29 @@ export function createMcpServer(): McpServer {
     },
     async (input) => {
       const result = await buscarCasoPorId(input.id);
+      if (!result.ok) {
+        return {
+          content: [{ type: 'text', text: `Erro: ${result.error.message}` }],
+          isError: true,
+        };
+      }
+      const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
+      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
+    },
+  );
+
+  server.tool(
+    'listar_processos',
+    'Enumera casos/processos do escritório no Astrea — listagem leve para audit ou cruzamentos (ex.: detectar processos sincronizados do tribunal com cliente anonimizado pra vincular ao cadastro completo). Filtros: `tipo` ("caso" = CTE_CASE, "processo" = CTE_LAWSUIT, "todos" — default `todos`), `status` ("ativo" — default, inclui Active+Suspended; "arquivado"; "todos"), `responsavelId` (compara contra o responsável do caso), `pagina`/`limite` (default 1/50). Cada item traz `id`, `titulo`, `numeroProcesso` (só pra processos), `clientePrincipalNome`, `responsavelNome`, `tipo`, `status` e `url` direta no app do Astrea. Sem heurística de detecção — quem decide o que fazer com a lista é o caller.',
+    {
+      tipo: z.enum(['caso', 'processo', 'todos']).optional(),
+      status: z.enum(['ativo', 'arquivado', 'todos']).optional(),
+      responsavelId: z.string().optional(),
+      pagina: z.number().int().positive().optional(),
+      limite: z.number().int().min(1).max(200).optional(),
+    },
+    async (input) => {
+      const result = await listarProcessos(input);
       if (!result.ok) {
         return {
           content: [{ type: 'text', text: `Erro: ${result.error.message}` }],
@@ -614,6 +639,34 @@ export function createMcpServer(): McpServer {
   );
 
   server.tool(
+    'vincular_cliente_caso',
+    'Adiciona um cliente cadastrado completo como cliente adicional de um caso/processo já existente — útil para corrigir processos sincronizados automaticamente do tribunal cujo cliente principal vem anonimizado (ex.: "I. P." em vez de "IRINEU PEDRO"). Não remove o cliente original (manter preserva a sincronização), apenas faz append em `customers`. Idempotente: chamar 2x com mesmo `casoId`+`clienteId` é no-op na segunda chamada (retorna `alreadyLinked: true`). Para processos, o papel é resolvido via `getStakeholderRoleByName` quando fornecido, ou copiado do primeiro cliente existente quando omitido. Use `isClientePrincipal: true` para promover o novo cliente a principal (remove `main` dos outros).',
+    {
+      casoId: z.string().describe('ID do caso/processo no Astrea'),
+      clienteId: z.string().describe('ID do contato cadastrado a vincular'),
+      papel: z
+        .string()
+        .optional()
+        .describe('Papel da nova parte (ex.: "Reclamante", "Autor"). Default: copia do primeiro cliente existente.'),
+      isClientePrincipal: z
+        .boolean()
+        .optional()
+        .describe('Quando true, novo cliente vira o principal (default: false — mantém o original)'),
+    },
+    async (input) => {
+      const result = await vincularClienteCaso(input);
+      if (!result.ok) {
+        return {
+          content: [{ type: 'text', text: `Erro: ${result.error.message}` }],
+          isError: true,
+        };
+      }
+      const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
+      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
+    },
+  );
+
+  server.tool(
     'adicionar_documento_link',
     'Adiciona um documento tipo Link (URL) ao cadastro de um cliente. Usado para registrar a pasta Drive do cliente, por exemplo.',
     {
@@ -693,7 +746,7 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'listar_agenda',
-    'Retorna a agenda unificada do escritório no Astrea — prazos, tarefas, atendimentos e audiências numa única chamada, igual à tela "Agenda" do app. Use para responder perguntas como "o que a Letícia Bernabé tem essa semana?" ou "quais audiências do Rafael Victor no próximo mês?". Filtros: `responsavelId` (omitir = todos os ativos; descubra o ID via `listar_usuarios`), `inicio`/`fim` em YYYY-MM-DD (default = semana corrente, domingo a sábado), `tipos` (subset de prazo/tarefa/atendimento/audiencia), `status` (todos/pendentes/concluidos), `incluirSemPrazo` (true para também trazer tarefas sem deadline marcada). Cada item inclui `responsavelNome`, `tituloComResponsavel` (formato "iniciais - título" usado pelo Astrea), `urlCaso`, e campos específicos por tipo (horários para atendimentos/audiências; `forum`/`endereco`/`sala` para audiências).',
+    'Retorna a agenda unificada do escritório no Astrea — prazos, tarefas, atendimentos e audiências numa única chamada, igual à tela "Agenda" do app. Use para responder perguntas como "o que a Letícia Bernabé tem essa semana?" ou "quais audiências do Rafael Victor no próximo mês?". Filtros: `responsavelId` (omitir = todos os ativos; descubra o ID via `listar_usuarios`), `inicio`/`fim` em YYYY-MM-DD (default = semana corrente, domingo a sábado), `tipos` (subset de prazo/tarefa/atendimento/audiencia), `status` (todos/pendentes/concluidos), `incluirSemPrazo` (true para também trazer tarefas sem deadline marcada), `numeroProcesso` (CNJ com ou sem máscara) para encontrar prazos/tarefas de um processo específico — útil pra cruzar contra intimações pendentes. Cada item inclui `responsavelNome`, `tituloComResponsavel` (formato "iniciais - título" usado pelo Astrea), `urlCaso`, e campos específicos por tipo (horários para atendimentos/audiências; `forum`/`endereco`/`sala` para audiências).',
     {
       responsavelId: z.string().optional(),
       inicio: z.string().optional(),
@@ -701,6 +754,7 @@ export function createMcpServer(): McpServer {
       tipos: z.array(z.enum(['prazo', 'tarefa', 'atendimento', 'audiencia'])).optional(),
       status: z.enum(['todos', 'pendentes', 'concluidos']).optional(),
       incluirSemPrazo: z.boolean().optional(),
+      numeroProcesso: z.string().optional(),
     },
     async (input) => {
       const result = await listarAgenda(input);

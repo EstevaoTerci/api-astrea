@@ -19,8 +19,14 @@ import type {
   CompartilhamentoCaso,
   CriarCasoInput,
   CriarProcessoInput,
+  ProcessoResumo,
 } from '../models/index.js';
-import type { FiltrosCaso, ServiceResponse, PaginationMeta } from '../types/index.js';
+import type {
+  FiltrosCaso,
+  FiltrosProcesso,
+  ServiceResponse,
+  PaginationMeta,
+} from '../types/index.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes  –  APIs REST internas do Astrea
@@ -564,6 +570,237 @@ export async function listarCasos(filtros?: FiltrosCaso): Promise<ServiceRespons
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Service: listarProcessos  –  Enumeração leve de casos/processos do escritório
+//
+// GET /api/processos
+//
+// Estratégia híbrida: extrai do Angular scope (dados completos com isLawsuit,
+// lawsuitNumber, customer, responsible) e cai para DOM scrape se o scope não
+// estiver no shape esperado. Filtros aplicados client-side para isolar a tool
+// do estado da UI.
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface RawFolderListItem {
+  id?: number | string;
+  title?: string;
+  subject?: string;
+  name?: string;
+  lawsuitNumber?: string;
+  processNumber?: string;
+  isLawsuit?: boolean;
+  caseType?: string;
+  status?: string;
+  customer?: { id?: number | string; name?: string; contactName?: string };
+  customerName?: string;
+  customers?: Array<{ id?: number | string; name?: string; main?: boolean }>;
+  responsible?: { id?: number | string; name?: string };
+  responsibleId?: number | string;
+  responsibleName?: string;
+}
+
+function inferTipo(raw: RawFolderListItem): 'caso' | 'processo' {
+  if (raw.isLawsuit === true) return 'processo';
+  if (raw.isLawsuit === false) return 'caso';
+  const ct = String(raw.caseType ?? '').toUpperCase();
+  if (ct.includes('LAWSUIT')) return 'processo';
+  return 'caso';
+}
+
+function inferClientePrincipal(raw: RawFolderListItem): string | undefined {
+  if (raw.customer?.name) return raw.customer.name;
+  if (raw.customer?.contactName) return raw.customer.contactName;
+  if (raw.customerName) return raw.customerName;
+  if (Array.isArray(raw.customers) && raw.customers.length > 0) {
+    const principal = raw.customers.find((c) => c.main === true) ?? raw.customers[0];
+    return principal?.name;
+  }
+  return undefined;
+}
+
+function statusBuckets(status?: FiltrosProcesso['status']): Set<string> | null {
+  if (!status || status === 'todos') return null;
+  if (status === 'arquivado') return new Set(['Archived']);
+  return new Set(['Active', 'Suspended']);
+}
+
+export async function listarProcessos(
+  filtros?: FiltrosProcesso,
+): Promise<ServiceResponse<ProcessoResumo[]>> {
+  try {
+    const data = await withBrowserContext(async (page) => {
+      await navigateTo(page, '/#/main/folders/[,,]');
+
+      // A tabela renderiza com delay; aguardar pelo menos uma linha aumenta a
+      // chance do controller ter populado o array de itens.
+      await page.waitForSelector('table tbody tr', { timeout: 15000 }).catch(() => {});
+
+      // 1. Tenta extrair do Angular scope (dados ricos)
+      let rawItems: RawFolderListItem[] | null = await page.evaluate(() => {
+        const ng = (window as any).angular;
+        if (!ng) return null;
+        const candidates = document.querySelectorAll(
+          '[ng-controller], au-folder-list, au-case-list, [class*="folder-list"], [class*="case-list"]',
+        );
+        for (const el of candidates) {
+          let scope: any = null;
+          try {
+            scope = ng.element(el).isolateScope?.() || ng.element(el).scope?.();
+          } catch {
+            continue;
+          }
+          if (!scope) continue;
+          const ctrl = scope.$ctrl ?? scope.vm ?? scope;
+          const arr = ctrl?.folders ?? ctrl?.cases ?? ctrl?.items ?? ctrl?.results;
+          if (Array.isArray(arr) && arr.length > 0 && arr[0]?.id != null) {
+            return arr.map((f: any) => ({
+              id: f.id,
+              title: f.title ?? f.subject ?? f.name,
+              lawsuitNumber: f.lawsuitNumber ?? f.processNumber,
+              isLawsuit: f.isLawsuit,
+              caseType: f.caseType,
+              status: f.status,
+              customer: f.customer
+                ? {
+                    id: f.customer.id,
+                    name: f.customer.name,
+                    contactName: f.customer.contactName,
+                  }
+                : undefined,
+              customerName: f.customerName,
+              customers: Array.isArray(f.customers)
+                ? f.customers.map((c: any) => ({ id: c.id, name: c.name, main: c.main }))
+                : undefined,
+              responsible: f.responsible
+                ? { id: f.responsible.id, name: f.responsible.name }
+                : undefined,
+              responsibleId: f.responsibleId,
+              responsibleName: f.responsibleName,
+            }));
+          }
+        }
+        return null;
+      });
+
+      // 2. Fallback DOM: extrai IDs/títulos e dispara getFolder por ID para enriquecer.
+      // Em volume alto, evite — mas é o único caminho se o scope mudou.
+      if (!rawItems || rawItems.length === 0) {
+        logger.warn(
+          'listarProcessos: Angular scope vazio — caindo para DOM scrape + folder fetch',
+        );
+        const rows = await page.$$('table tbody tr');
+        const fromDom: RawFolderListItem[] = [];
+        for (const row of rows) {
+          const titleLink = await row.$('td a[href*="folders"]');
+          if (!titleLink) continue;
+          const href = (await titleLink.getAttribute('href')) ?? '';
+          const idMatch = href.match(/folders\/(?:detail\/)?(\d+)/);
+          const id = idMatch?.[1];
+          if (!id) continue;
+          const titulo = (await titleLink.textContent())?.replace(/\s+/g, ' ').trim() ?? '';
+          fromDom.push({ id, title: titulo });
+        }
+
+        const userId = await getAstreaUserId(page);
+        const enriched: RawFolderListItem[] = [];
+        for (const item of fromDom) {
+          try {
+            const folder = await astreaApiGet<AstreaFolderDetail>(
+              page,
+              `${ASTREA_API}/folder/${item.id}?userId=${userId}&withDetails=true`,
+            );
+            enriched.push({
+              id: String(folder.id),
+              title: folder.title,
+              lawsuitNumber: folder.lawsuitNumber,
+              isLawsuit: folder.isLawsuit,
+              caseType: folder.caseType,
+              status: folder.status,
+              customer: folder.customer
+                ? {
+                    id: folder.customer.contactId,
+                    contactName: folder.customer.contactName,
+                  }
+                : undefined,
+              customers: folder.customers?.map((c) => ({
+                id: c.id,
+                name: c.name,
+                main: c.main,
+              })),
+              responsible: folder.responsible,
+              responsibleId: folder.responsibleId,
+            });
+          } catch (e) {
+            logger.warn({ id: item.id, err: String(e) }, 'Falha ao enriquecer folder no fallback');
+          }
+        }
+        rawItems = enriched;
+      }
+
+      const itens: ProcessoResumo[] = (rawItems ?? []).map((raw) => {
+        const id = String(raw.id ?? '');
+        const tipo = inferTipo(raw);
+        return {
+          id,
+          titulo: (raw.title ?? raw.subject ?? raw.name ?? '').trim(),
+          numeroProcesso:
+            tipo === 'processo' ? (raw.lawsuitNumber ?? raw.processNumber ?? undefined) : undefined,
+          clientePrincipalNome: inferClientePrincipal(raw),
+          responsavelNome: raw.responsible?.name ?? raw.responsibleName ?? undefined,
+          tipo,
+          status: mapStatus(raw.status),
+          url: urlCaso(id),
+          /** Status bruto preservado para o filtro client-side abaixo. */
+          ...({ _rawStatus: raw.status, _responsavelId: raw.responsible?.id ?? raw.responsibleId } as Record<string, unknown>),
+        };
+      });
+
+      // Filtros client-side
+      const buckets = statusBuckets(filtros?.status ?? 'ativo');
+      const tipoFilter = filtros?.tipo && filtros.tipo !== 'todos' ? filtros.tipo : null;
+      const respFilter = filtros?.responsavelId ? String(filtros.responsavelId) : null;
+
+      const filtrados = itens.filter((item) => {
+        const raw = item as unknown as { _rawStatus?: string; _responsavelId?: string | number };
+        if (buckets && !buckets.has(String(raw._rawStatus ?? 'Active'))) return false;
+        if (tipoFilter && item.tipo !== tipoFilter) return false;
+        if (respFilter && String(raw._responsavelId ?? '') !== respFilter) return false;
+        return true;
+      });
+
+      // Limpa campos internos antes de retornar
+      for (const item of filtrados) {
+        delete (item as unknown as Record<string, unknown>)._rawStatus;
+        delete (item as unknown as Record<string, unknown>)._responsavelId;
+      }
+
+      const pagina = filtros?.pagina ?? 1;
+      const limite = filtros?.limite ?? 50;
+      const paged = filtrados.slice((pagina - 1) * limite, pagina * limite);
+      const meta: PaginationMeta = {
+        pagina,
+        limite,
+        total: filtrados.length,
+        hasNextPage: pagina * limite < filtrados.length,
+      };
+
+      return { items: paged, meta };
+    });
+
+    return { ok: true, data: data.items, meta: data.meta };
+  } catch (err) {
+    logger.error({ err }, 'Erro em listarProcessos');
+    return {
+      ok: false,
+      error: {
+        message: err instanceof Error ? err.message : 'Erro desconhecido',
+        code: 'SCRAPE_ERROR',
+        retryable: isRetryablePlaywrightError(err),
+      },
+    };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Service: buscarCasosPorCliente  –  Todos os casos de um cliente
 //
 // GET /api/clientes/:id/casos
@@ -932,6 +1169,204 @@ export async function criarProcesso(
           err instanceof Error
             ? err.message.replace(/^(NOT_FOUND|API_ERROR|VALIDATION_ERROR):\s*/, '')
             : 'Erro desconhecido',
+        code: isNotFound ? 'NOT_FOUND' : isValidation ? 'VALIDATION_ERROR' : 'API_ERROR',
+        retryable: !isNotFound && !isValidation && isRetryablePlaywrightError(err),
+      },
+    };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Service: vincularClienteCaso  –  Adiciona cliente como parte de um caso/processo
+//
+// POST /api/casos/:id/clientes
+//
+// Permite adicionar um cliente cadastrado completo como cliente adicional de um
+// processo já existente (tipicamente sincronizado do tribunal com nome
+// anonimizado). Não remove os clientes originais — apenas faz append no array
+// `customers` e reenvia via saveCase/saveLawsuit.
+//
+// Idempotente: chamar 2x com mesmo (casoId, clienteId) é no-op na segunda.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface VincularClienteCasoInput {
+  casoId: string;
+  clienteId: string;
+  /** Papel da nova parte. Default: copia do primeiro customer existente. */
+  papel?: string;
+  /** Quando true, novo cliente vira o principal (e remove `main: true` dos outros). */
+  isClientePrincipal?: boolean;
+}
+
+export interface VincularClienteCasoResult {
+  /** True quando o cliente já estava vinculado e nada foi alterado. */
+  alreadyLinked: boolean;
+  /** Lista atualizada de partes do caso/processo. */
+  partes: ParteProcesso[];
+  /** ID do caso/processo (mesmo do input). */
+  casoId: string;
+}
+
+interface AstreaCaseByIdPayload {
+  id?: string | number;
+  caseType?: string;
+  caseVersion?: number;
+  version?: number;
+  customers?: Array<{
+    id?: string | number;
+    name?: string;
+    main?: boolean;
+    role?: string | number;
+    roleId?: string | number;
+    roleName?: string;
+    roleType?: string | number;
+    customerValid?: boolean;
+    customerRoleValid?: boolean;
+    [key: string]: unknown;
+  }>;
+  stakeholders?: unknown[];
+  [key: string]: unknown;
+}
+
+function coerceClienteId(raw: string): string | number {
+  const num = Number(raw);
+  return Number.isSafeInteger(num) && String(num) === raw ? num : raw;
+}
+
+export async function vincularClienteCaso(
+  input: VincularClienteCasoInput,
+): Promise<ServiceResponse<VincularClienteCasoResult>> {
+  try {
+    const result = await withBrowserContext(async (page) => {
+      await navigateTo(page, ANGULAR_PAGE_PATH);
+      const userId = await getUserIdFromHelper(page);
+
+      // 1. Snapshot atual do caso/processo (com customers, version, caseVersion).
+      const basePayload = await astreaGapiGet<AstreaCaseByIdPayload>(
+        page,
+        `/folders/v1/getCaseById?id=${encodeURIComponent(input.casoId)}&userId=${encodeURIComponent(userId)}`,
+      ).catch((err: unknown) => {
+        if (err instanceof Error && err.message.includes('API_ERROR_404')) {
+          throw new Error('NOT_FOUND: Caso/processo não encontrado');
+        }
+        throw err;
+      });
+
+      const customers = Array.isArray(basePayload.customers) ? [...basePayload.customers] : [];
+      const clienteIdStr = String(input.clienteId);
+
+      // 2. Idempotência: cliente já vinculado?
+      const yaPresente = customers.find((c) => String(c.id ?? '') === clienteIdStr);
+      if (yaPresente) {
+        return {
+          alreadyLinked: true,
+          partes: mapPartes({ customers, stakeholders: basePayload.stakeholders } as unknown as AstreaFolderDetail),
+          casoId: input.casoId,
+        };
+      }
+
+      // 3. Resolver nome do cliente.
+      const clienteResult = await buscarCliente(input.clienteId);
+      if (!clienteResult.ok) {
+        if (clienteResult.error.code === 'NOT_FOUND') {
+          throw new Error('VALIDATION_ERROR: Cliente não encontrado');
+        }
+        throw new Error(`API_ERROR: ${clienteResult.error.message}`);
+      }
+      const clienteNome = clienteResult.data.nome;
+
+      // 4. Determinar role da nova parte.
+      const isLawsuit = String(basePayload.caseType ?? '').toUpperCase().includes('LAWSUIT');
+      const refCustomer = customers[0];
+
+      const novoCustomer: Record<string, unknown> = {
+        id: coerceClienteId(clienteIdStr),
+        name: clienteNome,
+        main: input.isClientePrincipal === true,
+        customerValid: true,
+      };
+
+      if (isLawsuit) {
+        if (input.papel) {
+          const role = await astreaGapiGet<{ id?: string | number; name?: string; type?: string | number }>(
+            page,
+            `/folders/v1/getStakeholderRoleByName?name=${encodeURIComponent(input.papel)}`,
+          );
+          if (!role?.id) {
+            throw new Error(`VALIDATION_ERROR: Papel "${input.papel}" não encontrado no Astrea`);
+          }
+          novoCustomer.role = String(role.id);
+          novoCustomer.roleId = String(role.id);
+          novoCustomer.roleName = role.name ?? input.papel;
+          novoCustomer.customerRoleValid = true;
+          if (role.type != null) novoCustomer.roleType = String(role.type);
+        } else if (refCustomer) {
+          // Copia role do primeiro cliente — comportamento default pedido.
+          if (refCustomer.role != null) novoCustomer.role = refCustomer.role;
+          if (refCustomer.roleId != null) novoCustomer.roleId = refCustomer.roleId;
+          if (refCustomer.roleName != null) novoCustomer.roleName = refCustomer.roleName;
+          if (refCustomer.roleType != null) novoCustomer.roleType = refCustomer.roleType;
+          novoCustomer.customerRoleValid = true;
+        }
+      } else if (input.papel) {
+        // Caso (não-processo) com papel custom — Astrea aceita `roleName` livre.
+        novoCustomer.roleName = input.papel;
+      }
+
+      // 5. Montar novo array de customers (com flag main exclusiva se vier).
+      const nextCustomers = customers.map((c) =>
+        input.isClientePrincipal === true ? { ...c, main: false } : c,
+      );
+      nextCustomers.push(novoCustomer);
+
+      // 6. Repostar via saveCase ou saveLawsuit. Mantém o payload original
+      // intacto (id, caseVersion, version) — Astrea trata isso como edição
+      // do caso existente, não criação.
+      const method = isLawsuit ? 'saveLawsuit' : 'saveCase';
+      const finalPayload: Record<string, unknown> = {
+        ...basePayload,
+        customers: nextCustomers,
+        userId,
+      };
+
+      const saveResp = await astreaGapiPost<AstreaFolderSaveDirectResponse>(
+        page,
+        `/folders/v1/${method}?userId=${encodeURIComponent(userId)}&alt=json`,
+        finalPayload,
+        60_000,
+      );
+
+      const responseObj = typeof saveResp.response === 'object' ? saveResp.response : undefined;
+      const savedId = saveResp.folder?.id ?? responseObj?.id ?? basePayload.id;
+      if (!savedId) {
+        throw new Error('API_ERROR: Astrea não retornou folder.id após save');
+      }
+
+      // 7. Refetch via REST detalhado para obter partes formatadas com nomes
+      // estáveis (mapPartes usa stakeholders.contactName que não estão no
+      // payload-snapshot do getCaseById).
+      const folder = await astreaApiGet<AstreaFolderDetail>(
+        page,
+        `${ASTREA_API}/folder/${input.casoId}?userId=${userId}&withDetails=true`,
+      );
+
+      return {
+        alreadyLinked: false,
+        partes: mapPartes(folder),
+        casoId: String(savedId),
+      };
+    });
+
+    return { ok: true, data: result };
+  } catch (err) {
+    logger.error({ err }, 'Erro em vincularClienteCaso');
+    const message = err instanceof Error ? err.message : 'Erro desconhecido';
+    const isNotFound = message.includes('NOT_FOUND');
+    const isValidation = message.includes('VALIDATION_ERROR');
+    return {
+      ok: false,
+      error: {
+        message: message.replace(/^(NOT_FOUND|API_ERROR|VALIDATION_ERROR):\s*/, ''),
         code: isNotFound ? 'NOT_FOUND' : isValidation ? 'VALIDATION_ERROR' : 'API_ERROR',
         retryable: !isNotFound && !isValidation && isRetryablePlaywrightError(err),
       },

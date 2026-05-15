@@ -31,6 +31,7 @@ const querySchema = z.object({
     .union([z.boolean(), z.enum(['true', 'false', '1', '0'])])
     .transform((v) => v === true || v === 'true' || v === '1')
     .optional(),
+  numeroProcesso: z.string().optional(),
 });
 
 /** GET /api/agenda */

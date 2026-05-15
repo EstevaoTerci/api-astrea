@@ -6,6 +6,7 @@ export type {
   AtualizarClienteInput,
   Caso,
   ProcessoResumido,
+  ProcessoResumo,
   Processo,
   Andamento,
   Tarefa,
@@ -71,6 +72,17 @@ export interface FiltrosCaso {
   limite?: number;
 }
 
+export interface FiltrosProcesso {
+  /** "caso" (CTE_CASE), "processo" (CTE_LAWSUIT) ou "todos" (default). */
+  tipo?: 'caso' | 'processo' | 'todos';
+  /** "ativo" (default), "arquivado" ou "todos". */
+  status?: 'ativo' | 'arquivado' | 'todos';
+  /** ID do responsável (compara contra `responsible.id` ou `responsibleId`). */
+  responsavelId?: string;
+  pagina?: number;
+  limite?: number;
+}
+
 export interface FiltrosAndamento {
   dataInicio?: string;
   dataFim?: string;
@@ -123,6 +135,12 @@ export interface FiltrosAgenda {
    * pendente sem deadline marcada". Aplicado apenas se `tipos` incluir tarefa.
    */
   incluirSemPrazo?: boolean;
+  /**
+   * Número CNJ do processo (com ou sem máscara). Filtra eventos client-side
+   * comparando os dígitos contra `numeroProcesso` do evento. Útil para cruzar
+   * intimação contra prazos/tarefas existentes do processo.
+   */
+  numeroProcesso?: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

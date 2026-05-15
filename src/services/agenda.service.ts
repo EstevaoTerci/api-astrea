@@ -132,6 +132,11 @@ function inicioDiaBrtComoUtc(iso: string): string {
   return `${iso}T03:00:00.000Z`;
 }
 
+/** Remove tudo que não é dígito do CNJ para comparação tolerante a máscara. */
+function normalizarCnj(raw: string): string {
+  return raw.replace(/\D+/g, '');
+}
+
 /** Fim do dia BRT como UTC ISO: "YYYY-MM-DDT02:59:59.999Z" do dia seguinte. */
 function fimDiaBrtComoUtc(iso: string): string {
   return `${adicionarDias(iso, 1)}T02:59:59.999Z`;
@@ -274,12 +279,24 @@ export async function listarAgenda(
 
     // O Astrea já filtra por status na query principal, mas tasks-no-date não respeita.
     // Refinamento client-side garante consistência.
-    const filtrados =
+    let filtrados =
       filtros?.status && filtros.status !== 'todos'
         ? eventos.filter((e) =>
             filtros.status === 'pendentes' ? e.status === 'pendente' : e.status === 'concluido',
           )
         : eventos;
+
+    // Filtro por CNJ — o endpoint /calendar-pro/complete não aceita filtro
+    // server-side por número de processo (query.cases só recebe caseId). Compara
+    // pelos dígitos para aceitar CNJ com ou sem máscara.
+    if (filtros?.numeroProcesso) {
+      const alvo = normalizarCnj(filtros.numeroProcesso);
+      if (alvo) {
+        filtrados = filtrados.filter(
+          (e) => e.numeroProcesso && normalizarCnj(e.numeroProcesso) === alvo,
+        );
+      }
+    }
 
     // Ordenação: data crescente; sem data ao final.
     filtrados.sort((a, b) => {

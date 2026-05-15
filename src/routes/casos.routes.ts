@@ -1,6 +1,12 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
-import { criarCaso, criarProcesso, listarCasos, buscarCaso } from '../services/casos.service.js';
+import {
+  criarCaso,
+  criarProcesso,
+  listarCasos,
+  buscarCaso,
+  listarProcessos,
+} from '../services/casos.service.js';
 import { listarAndamentos } from '../services/andamentos.service.js';
 import type { ApiResponse, ApiError } from '../types/index.js';
 import type { CasoProcesso } from '../models/caso-processo.js';
@@ -49,6 +55,41 @@ function statusFromCode(code: string): number {
   if (code === 'BROWSER_UNAVAILABLE') return 503;
   return 500;
 }
+
+const processosQuerySchema = z.object({
+  tipo: z.enum(['caso', 'processo', 'todos']).optional(),
+  status: z.enum(['ativo', 'arquivado', 'todos']).optional(),
+  responsavelId: z.string().optional(),
+  pagina: z.coerce.number().int().positive().default(1),
+  limite: z.coerce.number().int().min(1).max(200).default(50),
+});
+
+/** GET /api/casos/processos — enumera casos/processos do escritório (resumo) */
+router.get('/processos', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const filtros = processosQuerySchema.parse(req.query);
+    const result = await listarProcessos(filtros);
+
+    if (!result.ok) {
+      const error: ApiError = {
+        success: false,
+        error: result.error.message,
+        code: result.error.code,
+      };
+      res.status(result.error.code === 'BROWSER_UNAVAILABLE' ? 503 : 500).json(error);
+      return;
+    }
+
+    const response: ApiResponse<typeof result.data> = {
+      success: true,
+      data: result.data,
+      meta: result.meta,
+    };
+    res.json(response);
+  } catch (err) {
+    next(err);
+  }
+});
 
 /** GET /api/casos */
 router.get('/', async (req: Request, res: Response, next: NextFunction) => {
