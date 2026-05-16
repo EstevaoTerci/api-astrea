@@ -773,10 +773,13 @@ export async function listarProcessos(
 // GET /api/clientes/:id/casos
 //
 // Fluxo:
-//  1. Navega para SPA usando $state.go('main.contacts-detail.folders', ...)
-//     → aba "Processos" do contato
-//  2. Scrape tabela DOM → extrai os IDs de cada caso (href dos links)
-//  3. Para cada ID, chama buscarCaso() via API para dados completos
+//  1. POST /api/v2/case/query com `contacts:[clienteId]` (filtro nativo) →
+//     lista de IDs (paginação por cursor, status:null para incluir ativos +
+//     arquivados, equivalente à aba "Processos" do contato).
+//  2. Para cada ID, chama buscarCaso() via API para dados completos.
+//
+// Validado em 2026-05-15: scrape DOM e /case/query retornaram exatamente o
+// mesmo conjunto de IDs para clientes com 1 e com 6 casos.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function buscarCasosPorCliente(
@@ -784,49 +787,61 @@ export async function buscarCasosPorCliente(
 ): Promise<ServiceResponse<CasoProcesso[]>> {
   try {
     const data = await withBrowserContext(async (page) => {
-      // Garante que AngularJS está carregado
       await navigateTo(page, ANGULAR_PAGE_PATH);
 
-      const userId = await getAstreaUserId(page);
-      if (!userId) throw new Error('SESSION_EXPIRED: Não foi possível obter userId');
+      const userIdStr = await getAstreaUserId(page);
+      if (!userIdStr) throw new Error('SESSION_EXPIRED: Não foi possível obter userId');
+      const userId = Number(userIdStr);
+      const clienteIdNum = Number(clienteId);
+      if (!Number.isFinite(clienteIdNum)) {
+        throw new Error(`API_ERROR: clienteId inválido: ${clienteId}`);
+      }
 
-      // ── Passo 1: Navega para a aba "Processos" do contato via ui-router ──
-      logger.debug({ clienteId }, 'Navegando para aba Processos do contato...');
+      const queryDTO = {
+        contacts: [clienteIdNum],
+        lawsuitTypes: [],
+        titles: [],
+        folders: [],
+        courts: [],
+        stakeholderRoles: [],
+        divisionNames: [],
+        numbers: [],
+        userId,
+        order: '-lastMovement',
+        types: [],
+        instances: [],
+        status: null,
+        tagIds: [],
+        treeView: false,
+        onlyImportant: null,
+        notUpdated: null,
+        isFromContactScreen: true,
+        treeMode: false,
+        historiesMovement: null,
+        createddate: null,
+        shareddate: null,
+        endeddate: null,
+        users: [],
+        team: null,
+      };
 
-      await page.evaluate(
-        ([contactId]) =>
-          new Promise<void>((resolve, reject) => {
-            try {
-              const $state = (window as any).angular
-                .element(document.body)
-                .injector()
-                .get('$state');
-              $state
-                .go('main.contacts-detail.folders', { contactId })
-                .then(() => resolve())
-                .catch((e: any) => reject(new Error(String(e))));
-            } catch (e) {
-              reject(e);
-            }
-          }),
-        [clienteId] as [string],
-      );
-
-      // Aguarda a tabela de processos/casos carregar
-      await page.waitForTimeout(3000);
-      await page.waitForSelector('table tbody tr', { timeout: 10000 }).catch(() => {});
-
-      // ── Passo 2: Extrai IDs dos casos a partir dos links na tabela ──
-      const caseIds: string[] = await page.evaluate(() => {
-        const links = document.querySelectorAll('table tbody tr td:nth-child(2) a');
-        const ids: string[] = [];
-        for (const link of links) {
-          const href = link.getAttribute('href') ?? '';
-          const match = href.match(/folders\/detail\/(\d+)/);
-          if (match?.[1]) ids.push(match[1]);
-        }
-        return ids;
-      });
+      const PAGE_SIZE = 100;
+      const caseIds: string[] = [];
+      let cursor = '';
+      while (true) {
+        const body = {
+          userId,
+          limit: PAGE_SIZE,
+          queryCursor: cursor,
+          queryDTO,
+          currentOrder: '-lastMovement',
+        };
+        const res = await astreaApiPost<AstreaCaseQueryResponse>(page, '/case/query', body);
+        const cases = res.cases ?? [];
+        for (const c of cases) caseIds.push(String(c.id));
+        if (cases.length < PAGE_SIZE || !res.cursor) break;
+        cursor = res.cursor;
+      }
 
       if (caseIds.length === 0) {
         logger.debug({ clienteId }, 'Nenhum caso encontrado para o cliente');
@@ -886,7 +901,7 @@ export async function buscarCasosPorCliente(
       ok: false,
       error: {
         message: err instanceof Error ? err.message : 'Erro desconhecido',
-        code: isNotFound ? 'NOT_FOUND' : 'SCRAPE_ERROR',
+        code: isNotFound ? 'NOT_FOUND' : 'API_ERROR',
         retryable: !isNotFound && isRetryablePlaywrightError(err),
       },
     };
