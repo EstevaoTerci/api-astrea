@@ -628,89 +628,135 @@ export async function listarProcessos(
 ): Promise<ServiceResponse<ProcessoResumo[]>> {
   try {
     const data = await withBrowserContext(async (page) => {
-      await navigateTo(page, '/#/main/folders/[,,]');
+      // Reset agressivo: passa por contacts antes pra invalidar qualquer
+      // controller residual da tela folders (a sessão Playwright é
+      // compartilhada, então um vincular_cliente_caso anterior pode ter
+      // deixado o ctrl com sub-array filtrado pelo cliente).
+      await navigateTo(page, ANGULAR_PAGE_PATH);
 
-      // A tabela renderiza com delay; aguardar pelo menos uma linha aumenta a
-      // chance do controller ter populado o array de itens.
+      // Tenta state.go com reload pra forçar reinit do controller.
+      await page
+        .evaluate(() => {
+          try {
+            const ng = (window as any).angular;
+            const $state = ng?.element(document.body)?.injector()?.get('$state');
+            if ($state) {
+              return $state.go('main.folders', {}, { reload: true });
+            }
+          } catch {}
+          return undefined;
+        })
+        .catch(() => undefined);
+      await page.waitForTimeout(800);
+
+      if (!page.url().includes('/folders/')) {
+        await navigateTo(page, '/#/main/folders/[,,]');
+      }
+
+      // Limpa qualquer busca textual residual no input principal.
+      try {
+        const searchInput = page.locator('input[placeholder*="pesquisar" i]').first();
+        const val = await searchInput.inputValue({ timeout: 1000 }).catch(() => '');
+        if (val) {
+          await searchInput.fill('', { timeout: 1500 });
+          await page.waitForTimeout(1500);
+        }
+      } catch {}
+
       await page.waitForSelector('table tbody tr', { timeout: 15000 }).catch(() => {});
 
-      // 1. Tenta extrair do Angular scope (dados ricos)
-      let rawItems: RawFolderListItem[] | null = await page.evaluate(() => {
-        const ng = (window as any).angular;
-        if (!ng) return null;
-        const candidates = document.querySelectorAll(
-          '[ng-controller], au-folder-list, au-case-list, [class*="folder-list"], [class*="case-list"]',
-        );
-        for (const el of candidates) {
-          let scope: any = null;
-          try {
-            scope = ng.element(el).isolateScope?.() || ng.element(el).scope?.();
-          } catch {
-            continue;
-          }
-          if (!scope) continue;
-          const ctrl = scope.$ctrl ?? scope.vm ?? scope;
-          const arr = ctrl?.folders ?? ctrl?.cases ?? ctrl?.items ?? ctrl?.results;
-          if (Array.isArray(arr) && arr.length > 0 && arr[0]?.id != null) {
-            return arr.map((f: any) => ({
-              id: f.id,
-              title: f.title ?? f.subject ?? f.name,
-              lawsuitNumber: f.lawsuitNumber ?? f.processNumber,
-              isLawsuit: f.isLawsuit,
-              caseType: f.caseType,
-              status: f.status,
-              customer: f.customer
-                ? {
-                    id: f.customer.id,
-                    name: f.customer.name,
-                    contactName: f.customer.contactName,
-                  }
-                : undefined,
-              customerName: f.customerName,
-              customers: Array.isArray(f.customers)
-                ? f.customers.map((c: any) => ({ id: c.id, name: c.name, main: c.main }))
-                : undefined,
-              responsible: f.responsible
-                ? { id: f.responsible.id, name: f.responsible.name }
-                : undefined,
-              responsibleId: f.responsibleId,
-              responsibleName: f.responsibleName,
-            }));
-          }
+      // Scroll incremental: o Astrea faz lazy load no scroll do container da
+      // tabela. Estabiliza quando a contagem de rows não muda por 3 rounds.
+      const MAX_SCROLL_ROUNDS = 80;
+      let prevCount = 0;
+      let stable = 0;
+      for (let i = 0; i < MAX_SCROLL_ROUNDS && stable < 3; i++) {
+        const count = await page
+          .$$eval('table tbody tr', (rows) => rows.length)
+          .catch(() => 0);
+        if (count === prevCount) {
+          stable++;
+        } else {
+          stable = 0;
+          prevCount = count;
         }
-        return null;
+        await page
+          .evaluate(() => {
+            const table = document.querySelector('table');
+            if (!table) {
+              window.scrollTo(0, document.body.scrollHeight);
+              return;
+            }
+            let el: HTMLElement | null = table as HTMLElement;
+            while (el) {
+              const style = window.getComputedStyle(el);
+              const oy = style.overflowY;
+              if ((oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight) {
+                el.scrollTop = el.scrollHeight;
+                return;
+              }
+              el = el.parentElement;
+            }
+            window.scrollTo(0, document.body.scrollHeight);
+          })
+          .catch(() => undefined);
+        await page.waitForTimeout(600);
+      }
+
+      // DOM scrape: lê (id, titulo, clienteFromTable) de cada linha.
+      const fromDom = await page.evaluate(() => {
+        const seen = new Set<string>();
+        const items: Array<{ id: string; title: string; customerName?: string }> = [];
+        const rows = document.querySelectorAll('table tbody tr');
+        for (const row of rows) {
+          const link = row.querySelector('a[href*="folders"]') as HTMLAnchorElement | null;
+          if (!link) continue;
+          const href = link.getAttribute('href') ?? '';
+          const m = href.match(/folders\/(?:detail\/)?(\d+)/);
+          if (!m) continue;
+          const id = m[1];
+          if (seen.has(id)) continue;
+          seen.add(id);
+          const title = link.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+          const cells = row.querySelectorAll('td');
+          const customerName = cells[2]?.textContent?.replace(/\s+/g, ' ').trim() || undefined;
+          items.push({ id, title, customerName });
+        }
+        return items;
       });
 
-      // 2. Fallback DOM: extrai IDs/títulos e dispara getFolder por ID para enriquecer.
-      // Em volume alto, evite — mas é o único caminho se o scope mudou.
-      if (!rawItems || rawItems.length === 0) {
-        logger.warn(
-          'listarProcessos: Angular scope vazio — caindo para DOM scrape + folder fetch',
-        );
-        const rows = await page.$$('table tbody tr');
-        const fromDom: RawFolderListItem[] = [];
-        for (const row of rows) {
-          const titleLink = await row.$('td a[href*="folders"]');
-          if (!titleLink) continue;
-          const href = (await titleLink.getAttribute('href')) ?? '';
-          const idMatch = href.match(/folders\/(?:detail\/)?(\d+)/);
-          const id = idMatch?.[1];
-          if (!id) continue;
-          const titulo = (await titleLink.textContent())?.replace(/\s+/g, ' ').trim() ?? '';
-          fromDom.push({ id, title: titulo });
-        }
+      logger.info(
+        { count: fromDom.length, scrollRounds: prevCount },
+        'listarProcessos: DOM scrape colheu N processos após scroll',
+      );
 
-        const userId = await getAstreaUserId(page);
-        const enriched: RawFolderListItem[] = [];
-        for (const item of fromDom) {
-          try {
-            const folder = await astreaApiGet<AstreaFolderDetail>(
+      if (fromDom.length === 0) {
+        return { items: [] as ProcessoResumo[], meta: { pagina: 1, limite: 50, total: 0 } };
+      }
+
+      // Enrichment via GET /folder/{id} em paralelo (batch 5) — necessário pra
+      // saber tipo (caso vs processo), lawsuitNumber, status real, responsável.
+      const userId = await getAstreaUserId(page);
+      const BATCH = 5;
+      const enriched: RawFolderListItem[] = [];
+      for (let i = 0; i < fromDom.length; i += BATCH) {
+        const batch = fromDom.slice(i, i + BATCH);
+        const results = await Promise.allSettled(
+          batch.map((item) =>
+            astreaApiGet<AstreaFolderDetail>(
               page,
               `${ASTREA_API}/folder/${item.id}?userId=${userId}&withDetails=true`,
-            );
+            ),
+          ),
+        );
+        for (let j = 0; j < results.length; j++) {
+          const r = results[j];
+          const original = batch[j];
+          if (r.status === 'fulfilled') {
+            const folder = r.value;
             enriched.push({
               id: String(folder.id),
-              title: folder.title,
+              title: folder.title ?? original.title,
               lawsuitNumber: folder.lawsuitNumber,
               isLawsuit: folder.isLawsuit,
               caseType: folder.caseType,
@@ -721,6 +767,7 @@ export async function listarProcessos(
                     contactName: folder.customer.contactName,
                   }
                 : undefined,
+              customerName: original.customerName,
               customers: folder.customers?.map((c) => ({
                 id: c.id,
                 name: c.name,
@@ -729,14 +776,22 @@ export async function listarProcessos(
               responsible: folder.responsible,
               responsibleId: folder.responsibleId,
             });
-          } catch (e) {
-            logger.warn({ id: item.id, err: String(e) }, 'Falha ao enriquecer folder no fallback');
+          } else {
+            // Mantém o item mesmo sem enrichment — tipo fica como 'caso' por
+            // default no inferTipo, mas pelo menos id/titulo/clienteFromTable
+            // permanecem disponíveis.
+            enriched.push({
+              id: original.id,
+              title: original.title,
+              customerName: original.customerName,
+            });
+            logger.warn({ id: original.id, err: String(r.reason) }, 'Enrichment falhou');
           }
         }
-        rawItems = enriched;
       }
+      const rawItems = enriched;
 
-      const itens: ProcessoResumo[] = (rawItems ?? []).map((raw) => {
+      const itens: ProcessoResumo[] = rawItems.map((raw) => {
         const id = String(raw.id ?? '');
         const tipo = inferTipo(raw);
         return {
