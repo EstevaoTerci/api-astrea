@@ -1,5 +1,6 @@
 import { Page } from 'playwright';
 import {
+  astreaApiPost,
   astreaGapiGet,
   astreaGapiPost,
   getAstreaUserId as getUserIdFromHelper,
@@ -570,57 +571,109 @@ export async function listarCasos(filtros?: FiltrosCaso): Promise<ServiceRespons
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Service: listarProcessos  –  Enumeração leve de casos/processos do escritório
+// Service: listarProcessos  –  Enumeração de casos/processos do escritório
 //
-// GET /api/processos
+// GET /api/casos/processos
 //
-// Estratégia híbrida: extrai do Angular scope (dados completos com isLawsuit,
-// lawsuitNumber, customer, responsible) e cai para DOM scrape se o scope não
-// estiver no shape esperado. Filtros aplicados client-side para isolar a tool
-// do estado da UI.
+// Usa POST /api/v2/case/query (endpoint REST nativo da tela "Processos e
+// casos"), capturado via Chrome DevTools em 2026-05-16. Paginação por
+// cursor, filtros server-side. Eliminou DOM scrape + scroll + enrichment
+// que sofriam com filtro de contato persistido no estado da sessão.
+//
+// Endpoints relacionados:
+//  - POST /api/v2/case/query        → lista paginada
+//  - POST /api/v2/case-list/count   → total filtrado (para meta)
 // ─────────────────────────────────────────────────────────────────────────────
 
-interface RawFolderListItem {
-  id?: number | string;
-  title?: string;
-  subject?: string;
-  name?: string;
-  lawsuitNumber?: string;
-  processNumber?: string;
-  isLawsuit?: boolean;
-  caseType?: string;
-  status?: string;
-  customer?: { id?: number | string; name?: string; contactName?: string };
-  customerName?: string;
+interface AstreaCaseQueryItem {
+  id: string | number;
+  type?: string; // "CTE_LAWSUIT" | "CTE_CASE"
+  number?: string; // CNJ
+  customer?: string;
   customers?: Array<{ id?: number | string; name?: string; main?: boolean }>;
-  responsible?: { id?: number | string; name?: string };
-  responsibleId?: number | string;
-  responsibleName?: string;
+  customerId?: string | number;
+  title?: string;
+  court?: string;
+  lawsuitType?: string;
+  active?: boolean;
+  sharingType?: string;
+  lastMovement?: string;
 }
 
-function inferTipo(raw: RawFolderListItem): 'caso' | 'processo' {
-  if (raw.isLawsuit === true) return 'processo';
-  if (raw.isLawsuit === false) return 'caso';
-  const ct = String(raw.caseType ?? '').toUpperCase();
-  if (ct.includes('LAWSUIT')) return 'processo';
-  return 'caso';
+interface AstreaCaseQueryResponse {
+  cursor?: string;
+  cases?: AstreaCaseQueryItem[];
+  userNames?: Record<string, string>;
 }
 
-function inferClientePrincipal(raw: RawFolderListItem): string | undefined {
-  if (raw.customer?.name) return raw.customer.name;
-  if (raw.customer?.contactName) return raw.customer.contactName;
-  if (raw.customerName) return raw.customerName;
-  if (Array.isArray(raw.customers) && raw.customers.length > 0) {
-    const principal = raw.customers.find((c) => c.main === true) ?? raw.customers[0];
-    return principal?.name;
-  }
-  return undefined;
+interface AstreaCaseCountResponse {
+  count?: number;
 }
 
-function statusBuckets(status?: FiltrosProcesso['status']): Set<string> | null {
-  if (!status || status === 'todos') return null;
-  if (status === 'arquivado') return new Set(['Archived']);
-  return new Set(['Active', 'Suspended']);
+const STATUS_QUERY_MAP: Record<NonNullable<FiltrosProcesso['status']>, string | null> = {
+  ativo: 'Active',
+  arquivado: 'Inactive',
+  todos: null,
+};
+
+const TIPO_QUERY_MAP: Record<NonNullable<FiltrosProcesso['tipo']>, string[]> = {
+  caso: ['CTE_CASE'],
+  processo: ['CTE_LAWSUIT'],
+  todos: [],
+};
+
+function buildQueryDTO(filtros: FiltrosProcesso | undefined, userId: number): Record<string, unknown> {
+  const statusKey: FiltrosProcesso['status'] = filtros?.status ?? 'ativo';
+  const tipoKey: FiltrosProcesso['tipo'] = filtros?.tipo ?? 'todos';
+  const status = STATUS_QUERY_MAP[statusKey];
+  const types = TIPO_QUERY_MAP[tipoKey];
+  const users = filtros?.responsavelId ? [Number(filtros.responsavelId)] : [];
+
+  return {
+    contacts: [],
+    lawsuitTypes: [],
+    titles: [],
+    folders: [],
+    courts: [],
+    stakeholderRoles: [],
+    divisionNames: [],
+    numbers: [],
+    userId,
+    order: '-lastMovement',
+    types,
+    instances: [],
+    status,
+    tagIds: [],
+    treeView: false,
+    onlyImportant: null,
+    notUpdated: null,
+    isFromContactScreen: false,
+    treeMode: false,
+    historiesMovement: null,
+    createddate: null,
+    shareddate: null,
+    endeddate: null,
+    users,
+    team: null,
+  };
+}
+
+function mapCaseQueryItem(c: AstreaCaseQueryItem): ProcessoResumo {
+  const id = String(c.id ?? '');
+  const tipo: 'caso' | 'processo' = String(c.type ?? '').toUpperCase().includes('LAWSUIT')
+    ? 'processo'
+    : 'caso';
+  const principal = (c.customers ?? []).find((x) => x.main === true) ?? c.customers?.[0];
+  return {
+    id,
+    titulo: (c.title ?? '').trim(),
+    numeroProcesso: tipo === 'processo' ? c.number || undefined : undefined,
+    clientePrincipalNome: principal?.name ?? c.customer ?? undefined,
+    responsavelNome: undefined, // /case/query não retorna responsável; obtenha via buscar_caso se precisar
+    tipo,
+    status: c.active === false ? 'Arquivado' : 'Ativo',
+    url: urlCaso(id),
+  };
 }
 
 export async function listarProcessos(
@@ -628,214 +681,73 @@ export async function listarProcessos(
 ): Promise<ServiceResponse<ProcessoResumo[]>> {
   try {
     const data = await withBrowserContext(async (page) => {
-      // Reset agressivo: passa por contacts antes pra invalidar qualquer
-      // controller residual da tela folders (a sessão Playwright é
-      // compartilhada, então um vincular_cliente_caso anterior pode ter
-      // deixado o ctrl com sub-array filtrado pelo cliente).
+      // Qualquer página Angular serve — só precisamos do $http com interceptor de sessão.
       await navigateTo(page, ANGULAR_PAGE_PATH);
-
-      // Tenta state.go com reload pra forçar reinit do controller.
-      await page
-        .evaluate(() => {
-          try {
-            const ng = (window as any).angular;
-            const $state = ng?.element(document.body)?.injector()?.get('$state');
-            if ($state) {
-              return $state.go('main.folders', {}, { reload: true });
-            }
-          } catch {}
-          return undefined;
-        })
-        .catch(() => undefined);
-      await page.waitForTimeout(800);
-
-      if (!page.url().includes('/folders/')) {
-        await navigateTo(page, '/#/main/folders/[,,]');
+      const userId = Number(await getAstreaUserId(page));
+      if (!Number.isFinite(userId)) {
+        throw new Error('SESSION_EXPIRED: userId inválido');
       }
 
-      // Limpa qualquer busca textual residual no input principal.
+      const queryDTO = buildQueryDTO(filtros, userId);
+      const pagina = Math.max(1, filtros?.pagina ?? 1);
+      const limite = Math.max(1, Math.min(filtros?.limite ?? 50, 200));
+
+      // O endpoint pagina por cursor. Para devolver a página N do consumidor
+      // sem buscar a base inteira, iteramos com PAGE_SIZE até cobrir N*limite
+      // itens. Pra "todos", consumidor pagina chamando com `pagina` incremental.
+      const PAGE_SIZE = 100;
+      const itensAlvo = pagina * limite;
+      const collected: AstreaCaseQueryItem[] = [];
+      let cursor = '';
+
+      while (collected.length < itensAlvo) {
+        const body = {
+          userId,
+          limit: PAGE_SIZE,
+          queryCursor: cursor,
+          queryDTO,
+          currentOrder: '-lastMovement',
+        };
+        const res = await astreaApiPost<AstreaCaseQueryResponse>(page, '/case/query', body);
+        const cases = res.cases ?? [];
+        collected.push(...cases);
+        if (cases.length < PAGE_SIZE || !res.cursor) break;
+        cursor = res.cursor;
+      }
+
+      // Total filtrado em paralelo (chamada barata; o front da Astrea faz isso).
+      let total: number | undefined;
       try {
-        const searchInput = page.locator('input[placeholder*="pesquisar" i]').first();
-        const val = await searchInput.inputValue({ timeout: 1000 }).catch(() => '');
-        if (val) {
-          await searchInput.fill('', { timeout: 1500 });
-          await page.waitForTimeout(1500);
-        }
-      } catch {}
-
-      await page.waitForSelector('table tbody tr', { timeout: 15000 }).catch(() => {});
-
-      // Scroll incremental: o Astrea faz lazy load no scroll do container da
-      // tabela. Estabiliza quando a contagem de rows não muda por 3 rounds.
-      const MAX_SCROLL_ROUNDS = 80;
-      let prevCount = 0;
-      let stable = 0;
-      for (let i = 0; i < MAX_SCROLL_ROUNDS && stable < 3; i++) {
-        const count = await page
-          .$$eval('table tbody tr', (rows) => rows.length)
-          .catch(() => 0);
-        if (count === prevCount) {
-          stable++;
-        } else {
-          stable = 0;
-          prevCount = count;
-        }
-        await page
-          .evaluate(() => {
-            const table = document.querySelector('table');
-            if (!table) {
-              window.scrollTo(0, document.body.scrollHeight);
-              return;
-            }
-            let el: HTMLElement | null = table as HTMLElement;
-            while (el) {
-              const style = window.getComputedStyle(el);
-              const oy = style.overflowY;
-              if ((oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight) {
-                el.scrollTop = el.scrollHeight;
-                return;
-              }
-              el = el.parentElement;
-            }
-            window.scrollTo(0, document.body.scrollHeight);
-          })
-          .catch(() => undefined);
-        await page.waitForTimeout(600);
+        const countBody = {
+          userId,
+          limit: PAGE_SIZE,
+          queryCursor: '',
+          queryDTO,
+          currentOrder: '-lastMovement',
+        };
+        const countRes = await astreaApiPost<AstreaCaseCountResponse>(
+          page,
+          '/case-list/count',
+          countBody,
+        );
+        total = countRes.count;
+      } catch (e) {
+        logger.warn({ err: String(e) }, 'listarProcessos: falha no count — segue sem total');
       }
-
-      // DOM scrape: lê (id, titulo, clienteFromTable) de cada linha.
-      const fromDom = await page.evaluate(() => {
-        const seen = new Set<string>();
-        const items: Array<{ id: string; title: string; customerName?: string }> = [];
-        const rows = document.querySelectorAll('table tbody tr');
-        for (const row of rows) {
-          const link = row.querySelector('a[href*="folders"]') as HTMLAnchorElement | null;
-          if (!link) continue;
-          const href = link.getAttribute('href') ?? '';
-          const m = href.match(/folders\/(?:detail\/)?(\d+)/);
-          if (!m) continue;
-          const id = m[1];
-          if (seen.has(id)) continue;
-          seen.add(id);
-          const title = link.textContent?.replace(/\s+/g, ' ').trim() ?? '';
-          const cells = row.querySelectorAll('td');
-          const customerName = cells[2]?.textContent?.replace(/\s+/g, ' ').trim() || undefined;
-          items.push({ id, title, customerName });
-        }
-        return items;
-      });
 
       logger.info(
-        { count: fromDom.length, scrollRounds: prevCount },
-        'listarProcessos: DOM scrape colheu N processos após scroll',
+        { collected: collected.length, total, pagina, limite },
+        'listarProcessos: case/query OK',
       );
 
-      if (fromDom.length === 0) {
-        return { items: [] as ProcessoResumo[], meta: { pagina: 1, limite: 50, total: 0 } };
-      }
-
-      // Enrichment via GET /folder/{id} em paralelo (batch 5) — necessário pra
-      // saber tipo (caso vs processo), lawsuitNumber, status real, responsável.
-      const userId = await getAstreaUserId(page);
-      const BATCH = 5;
-      const enriched: RawFolderListItem[] = [];
-      for (let i = 0; i < fromDom.length; i += BATCH) {
-        const batch = fromDom.slice(i, i + BATCH);
-        const results = await Promise.allSettled(
-          batch.map((item) =>
-            astreaApiGet<AstreaFolderDetail>(
-              page,
-              `${ASTREA_API}/folder/${item.id}?userId=${userId}&withDetails=true`,
-            ),
-          ),
-        );
-        for (let j = 0; j < results.length; j++) {
-          const r = results[j];
-          const original = batch[j];
-          if (r.status === 'fulfilled') {
-            const folder = r.value;
-            enriched.push({
-              id: String(folder.id),
-              title: folder.title ?? original.title,
-              lawsuitNumber: folder.lawsuitNumber,
-              isLawsuit: folder.isLawsuit,
-              caseType: folder.caseType,
-              status: folder.status,
-              customer: folder.customer
-                ? {
-                    id: folder.customer.contactId,
-                    contactName: folder.customer.contactName,
-                  }
-                : undefined,
-              customerName: original.customerName,
-              customers: folder.customers?.map((c) => ({
-                id: c.id,
-                name: c.name,
-                main: c.main,
-              })),
-              responsible: folder.responsible,
-              responsibleId: folder.responsibleId,
-            });
-          } else {
-            // Mantém o item mesmo sem enrichment — tipo fica como 'caso' por
-            // default no inferTipo, mas pelo menos id/titulo/clienteFromTable
-            // permanecem disponíveis.
-            enriched.push({
-              id: original.id,
-              title: original.title,
-              customerName: original.customerName,
-            });
-            logger.warn({ id: original.id, err: String(r.reason) }, 'Enrichment falhou');
-          }
-        }
-      }
-      const rawItems = enriched;
-
-      const itens: ProcessoResumo[] = rawItems.map((raw) => {
-        const id = String(raw.id ?? '');
-        const tipo = inferTipo(raw);
-        return {
-          id,
-          titulo: (raw.title ?? raw.subject ?? raw.name ?? '').trim(),
-          numeroProcesso:
-            tipo === 'processo' ? (raw.lawsuitNumber ?? raw.processNumber ?? undefined) : undefined,
-          clientePrincipalNome: inferClientePrincipal(raw),
-          responsavelNome: raw.responsible?.name ?? raw.responsibleName ?? undefined,
-          tipo,
-          status: mapStatus(raw.status),
-          url: urlCaso(id),
-          /** Status bruto preservado para o filtro client-side abaixo. */
-          ...({ _rawStatus: raw.status, _responsavelId: raw.responsible?.id ?? raw.responsibleId } as Record<string, unknown>),
-        };
-      });
-
-      // Filtros client-side
-      const buckets = statusBuckets(filtros?.status ?? 'ativo');
-      const tipoFilter = filtros?.tipo && filtros.tipo !== 'todos' ? filtros.tipo : null;
-      const respFilter = filtros?.responsavelId ? String(filtros.responsavelId) : null;
-
-      const filtrados = itens.filter((item) => {
-        const raw = item as unknown as { _rawStatus?: string; _responsavelId?: string | number };
-        if (buckets && !buckets.has(String(raw._rawStatus ?? 'Active'))) return false;
-        if (tipoFilter && item.tipo !== tipoFilter) return false;
-        if (respFilter && String(raw._responsavelId ?? '') !== respFilter) return false;
-        return true;
-      });
-
-      // Limpa campos internos antes de retornar
-      for (const item of filtrados) {
-        delete (item as unknown as Record<string, unknown>)._rawStatus;
-        delete (item as unknown as Record<string, unknown>)._responsavelId;
-      }
-
-      const pagina = filtros?.pagina ?? 1;
-      const limite = filtros?.limite ?? 50;
-      const paged = filtrados.slice((pagina - 1) * limite, pagina * limite);
+      const itens = collected.map(mapCaseQueryItem);
+      const paged = itens.slice((pagina - 1) * limite, pagina * limite);
       const meta: PaginationMeta = {
         pagina,
         limite,
-        total: filtrados.length,
-        hasNextPage: pagina * limite < filtrados.length,
+        total: total ?? itens.length,
+        hasNextPage:
+          total != null ? pagina * limite < total : collected.length > pagina * limite,
       };
 
       return { items: paged, meta };
@@ -848,7 +760,7 @@ export async function listarProcessos(
       ok: false,
       error: {
         message: err instanceof Error ? err.message : 'Erro desconhecido',
-        code: 'SCRAPE_ERROR',
+        code: 'API_ERROR',
         retryable: isRetryablePlaywrightError(err),
       },
     };
