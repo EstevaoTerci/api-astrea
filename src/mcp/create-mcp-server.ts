@@ -79,12 +79,22 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'buscar_cliente',
-    'Busca um cliente por ID. Retorna `url` com o link direto do contato no app do Astrea.',
+    'Busca um cliente por ID. Retorna `url` com o link direto do contato no app do Astrea. ' +
+      'Por padrão NÃO carrega a aba Documentos (scrape lento — 1-15s no caminho feliz, até 45s+ quando o DOM do Astrea muda). ' +
+      'Passe `incluirDocumentos: true` apenas se precisar do array `documentos[]`.',
     {
       id: z.string(),
+      incluirDocumentos: z
+        .boolean()
+        .optional()
+        .describe(
+          'Se true, carrega a aba Documentos do contato (operação lenta). Default false.',
+        ),
     },
     async (input) => {
-      const result = await buscarClientePorId(input.id);
+      const result = await buscarClientePorId(input.id, {
+        incluirDocumentos: input.incluirDocumentos ?? false,
+      });
       if (!result.ok) {
         return {
           content: [{ type: 'text', text: `Erro: ${result.error.message}` }],

@@ -1,5 +1,11 @@
 import { Page } from 'playwright';
-import { withBrowserContext } from '../browser/astrea-http.js';
+import {
+  withBrowserContext,
+  astreaApiGet,
+  astreaApiPost,
+  getAstreaUserId,
+  ASTREA_API,
+} from '../browser/astrea-http.js';
 import { navigateTo } from '../browser/navigator.js';
 import { isRetryablePlaywrightError } from '../utils/retry.js';
 import { logger } from '../utils/logger.js';
@@ -21,9 +27,6 @@ import type {
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes
 // ─────────────────────────────────────────────────────────────────────────────
-
-/** Base URL da API interna do Astrea */
-const ASTREA_API = 'https://app.astrea.net.br/api/v2';
 
 /**
  * Qualquer rota do Astrea que carregue o AngularJS é suficiente.
@@ -134,44 +137,12 @@ interface AstreaContactDraft {
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers: chamadas autenticadas à API via AngularJS $http
 //
-// O app do Astrea usa AngularJS com interceptors que adicionam o token de
-// sessão automaticamente em cada request. Ao executar $http via page.evaluate,
-// os interceptors são acionados — sem necessidade de gerenciar tokens manualmente.
+// Os wrappers `astreaApiGet`/`astreaApiPost` (importados de ../browser/astrea-http)
+// já tratam a inicialização do $http de forma defensiva (optional chaining) e
+// padronizam as mensagens de erro. Ao usá-los em vez de helpers locais, evitamos
+// crashes do tipo "Cannot read properties of undefined (reading 'element')"
+// quando o Angular ainda não está disponível.
 // ─────────────────────────────────────────────────────────────────────────────
-
-async function astreaApiGet<T>(page: Page, url: string): Promise<T> {
-  return page.evaluate(
-    ([apiUrl]) =>
-      new Promise<T>((resolve, reject) => {
-        const http = (window as any).angular.element(document.body).injector().get('$http');
-        http
-          .get(apiUrl)
-          .then((r: any) => resolve(r.data as T))
-          .catch((err: any) => {
-            const msg = `API_ERROR_${err.status}: ${JSON.stringify(err.data?.errorMessage ?? err.data ?? err.status)}`;
-            reject(new Error(msg));
-          });
-      }),
-    [url] as [string],
-  );
-}
-
-async function astreaApiPost<T>(page: Page, url: string, body: unknown): Promise<T> {
-  return page.evaluate(
-    ([apiUrl, payload]) =>
-      new Promise<T>((resolve, reject) => {
-        const http = (window as any).angular.element(document.body).injector().get('$http');
-        http
-          .post(apiUrl, payload)
-          .then((r: any) => resolve(r.data as T))
-          .catch((err: any) => {
-            const msg = `API_ERROR_${err.status}: ${JSON.stringify(err.data?.errorMessage ?? err.data ?? err.status)}`;
-            reject(new Error(msg));
-          });
-      }),
-    [url, body] as [string, unknown],
-  );
-}
 
 async function loadDefaultContactDraft(page: Page): Promise<AstreaContactDraft> {
   await navigateTo(page, CONTACT_ADD_PERSONAL_PATH);
@@ -479,7 +450,7 @@ export async function listarClientes(
 
       const response = await astreaApiPost<AstreaContactListResponse>(
         page,
-        `${ASTREA_API}/contact/all`,
+        `/contact/all`,
         buildSearchPayload(
           {
             text: searchText,
@@ -525,7 +496,7 @@ export async function listarClientes(
             try {
               const details = await astreaApiGet<AstreaContactDetails>(
                 page,
-                `${ASTREA_API}/contact/${item.id}/details`,
+                `/contact/${item.id}/details`,
               );
               return mapContactDetails(details);
             } catch (enrichErr) {
@@ -608,7 +579,7 @@ export async function listarTodosClientes(
 
       const response = await astreaApiPost<AstreaContactListResponse>(
         page,
-        `${ASTREA_API}/contact/all`,
+        `/contact/all`,
         {
           queryDTO: {
             ...buildQueryDTO({
@@ -927,7 +898,7 @@ export async function criarCliente(input: CriarClienteInput): Promise<ServiceRes
 
       const response = await astreaApiPost<AstreaSaveContactResponse>(
         page,
-        `${ASTREA_API}/contact/save`,
+        `/contact/save`,
         payload,
       );
 
@@ -1133,7 +1104,7 @@ export async function atualizarCliente(
       // 1. Lê o estado atual do contato
       const details = await astreaApiGet<AstreaContactDetails & Record<string, unknown>>(
         page,
-        `${ASTREA_API}/contact/${idTrim}/details`,
+        `/contact/${idTrim}/details`,
       ).catch((err: unknown) => {
         if (err instanceof Error && err.message.includes('API_ERROR_404')) {
           throw new Error('NOT_FOUND: Contato não encontrado');
@@ -1150,7 +1121,7 @@ export async function atualizarCliente(
       // 4. Envia para /save (full replace)
       const response = await astreaApiPost<AstreaSaveContactResponse>(
         page,
-        `${ASTREA_API}/contact/save`,
+        `/contact/save`,
         payload,
       );
 
@@ -1182,30 +1153,38 @@ export async function atualizarCliente(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Buscar documentos de um contato via scraping do scope AngularJS
+// Buscar documentos de um contato via REST nativo
 //
-// Fluxo:
-//  1. Navega pelo SPA: $state.go('main.contacts-detail.documents', { contactId })
-//  2. Aguarda o componente <document-list> carregar os documentos
-//  3. Lê os documentos do scope isolado ($ctrl.data.documents)
-//  4. Se hasMorePages, chama $ctrl.loadMore() e repete
-//  5. Mapeia para DocumentoContato[]
+// Endpoint mapeado em 2026-05-19 (chrome-devtools MCP) capturando a chamada
+// real que o componente <document-list> dispara ao abrir a aba "Documentos":
 //
-// Nota: Não existe endpoint REST que filtre documentos por contato. O endpoint
-// POST /documents/all retorna TODOS os documentos do escritório, sem filtro
-// por customerId. O SPA filtra client-side via AngularJS component binding.
+//   POST /api/v2/documents/all
+//   Body: {
+//     order: '-updateDate', limit: 30,
+//     beginUpdateDate/endUpdateDate/beginCreateDate/endCreateDate: null,
+//     origin: null,
+//     customers: [contactId],   // ← filtro server-side por contato
+//     descriptions: [], caseIds: [], responsibleIds: [],
+//     userId,                    // ← userId do usuário logado
+//     queryCursor: ''            // ← paginação por cursor
+//   }
+//   Resp: { queryCursor, count, dtoList: [...] }
+//
+// Substitui o DOM scrape antigo ($state.go + waitForSelector('document-list')
+// + loadMore()), que ficou frágil quando o Astrea passou a renderizar o
+// componente com display:hidden em alguns estados (causando timeout de 15s).
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Representação interna de um documento retornado pelo scope do AngularJS */
-interface AstreaDocumentScope {
+/** Item do `dtoList` retornado por POST /documents/all */
+interface AstreaDocumentDTO {
   id: number;
   type: string;
   title: string;
   url?: string;
   origin?: string;
   responsibleName?: string;
-  updateDateFormatted?: string;
-  documentDescription?: string;
+  /** Timestamp em ms da última atualização */
+  updateDate?: number;
   downloadDocumentUrl?: string;
   customerId?: number;
   customerName?: string;
@@ -1214,6 +1193,12 @@ interface AstreaDocumentScope {
     title: string;
     caseType: string;
   } | null;
+}
+
+interface AstreaDocumentsAllResponse {
+  queryCursor?: string;
+  count?: number;
+  dtoList?: AstreaDocumentDTO[];
 }
 
 /**
@@ -1232,16 +1217,31 @@ function findUrlPastaDriveNosDocumentos(documentos: DocumentoContato[]): string 
   return undefined;
 }
 
-function mapDocumentScope(d: AstreaDocumentScope): DocumentoContato {
+/** Formata um timestamp (ms) para `dd/MM/yyyy` na timezone de São Paulo. */
+function formatUpdateDate(ts: number | undefined): string | undefined {
+  if (!ts || !Number.isFinite(ts)) return undefined;
+  try {
+    return new Intl.DateTimeFormat('pt-BR', {
+      timeZone: 'America/Sao_Paulo',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+    }).format(new Date(ts));
+  } catch {
+    return undefined;
+  }
+}
+
+function mapDocumentDTO(d: AstreaDocumentDTO): DocumentoContato {
   return {
     id: String(d.id),
     tipo: d.type ?? '',
     titulo: d.title ?? '',
-    descricao: d.documentDescription ?? undefined,
+    descricao: undefined, // /documents/all não retorna documentDescription
     url: d.url ?? undefined,
     urlDownload: d.downloadDocumentUrl ?? undefined,
     responsavel: d.responsibleName ?? undefined,
-    ultimaEdicao: d.updateDateFormatted ?? undefined,
+    ultimaEdicao: formatUpdateDate(d.updateDate),
     origem: d.origin ?? undefined,
     caso: d.caseDTO
       ? {
@@ -1254,83 +1254,50 @@ function mapDocumentScope(d: AstreaDocumentScope): DocumentoContato {
 }
 
 /**
- * Navega até a aba "Documentos" do contato via SPA e extrai os documentos
- * do scope isolado do componente <document-list>.
+ * Busca os documentos de um contato via POST /documents/all (REST nativo).
+ * Paginação por cursor — encerra quando o backend devolve `queryCursor` vazio
+ * ou `dtoList` vazio, com um teto de segurança de MAX_PAGES.
  */
 async function buscarDocumentosContato(page: Page, contactId: string): Promise<DocumentoContato[]> {
-  logger.debug({ contactId }, 'Buscando documentos do contato via SPA...');
+  logger.debug({ contactId }, 'Buscando documentos do contato via REST...');
 
-  // Navegar via $state.go para a aba de documentos do contato
-  await page.evaluate(
-    ([cId]) => {
-      const $state = (window as any).angular.element(document.body).injector().get('$state');
-      $state.go('main.contacts-detail.documents', { contactId: cId });
-    },
-    [contactId] as [string],
-  );
+  const userId = await getAstreaUserId(page);
 
-  // Aguardar o componente <document-list> carregar
-  await page.waitForSelector('document-list', { timeout: 15_000 });
+  const PAGE_SIZE = 50;
+  const MAX_PAGES = 40;
 
-  // Aguardar que o loading do componente termine
-  await page.waitForFunction(
-    () => {
-      const el = document.querySelector('document-list');
-      if (!el) return false;
-      const iScope = (window as any).angular.element(el).isolateScope?.();
-      return iScope?.$ctrl?.loading === false;
-    },
-    { timeout: 15_000 },
-  );
+  let cursor = '';
+  let pages = 0;
+  const documentos: DocumentoContato[] = [];
 
-  // Extrair documentos do scope com paginação automática
-  const rawDocs = (await page.evaluate(async () => {
-    const el = document.querySelector('document-list');
-    if (!el) return [];
+  while (pages < MAX_PAGES) {
+    const res = await astreaApiPost<AstreaDocumentsAllResponse>(page, `/documents/all`, {
+      order: '-updateDate',
+      limit: PAGE_SIZE,
+      beginUpdateDate: null,
+      endUpdateDate: null,
+      beginCreateDate: null,
+      endCreateDate: null,
+      origin: null,
+      customers: [contactId],
+      descriptions: [],
+      caseIds: [],
+      responsibleIds: [],
+      userId,
+      queryCursor: cursor,
+    });
 
-    const iScope = (window as any).angular.element(el).isolateScope?.();
-    const ctrl = iScope?.$ctrl;
-    if (!ctrl?.data?.documents) return [];
+    const list = res.dtoList ?? [];
+    for (const d of list) documentos.push(mapDocumentDTO(d));
 
-    // Se há mais páginas, carregar todas
-    const MAX_PAGES = 20; // segurança contra loop infinito
-    let pages = 0;
-    while (ctrl.hasMorePages && pages < MAX_PAGES) {
-      ctrl.loadMore();
-      // Aguardar o loading finalizar
-      await new Promise<void>((resolve) => {
-        const check = () => {
-          if (!ctrl.loading) return resolve();
-          setTimeout(check, 200);
-        };
-        setTimeout(check, 300);
-      });
-      pages++;
-    }
+    if (!res.queryCursor || list.length === 0) break;
+    cursor = res.queryCursor;
+    pages++;
+  }
 
-    // Serializar documentos (sem referências circulares do Angular)
-    return (ctrl.data.documents as any[]).map((d: any) => ({
-      id: d.id,
-      type: d.type,
-      title: d.title,
-      url: d.url,
-      origin: d.origin,
-      responsibleName: d.responsibleName,
-      updateDateFormatted: d.updateDateFormatted,
-      documentDescription: d.documentDescription,
-      downloadDocumentUrl: d.downloadDocumentUrl,
-      customerId: d.customerId,
-      customerName: d.customerName,
-      caseDTO: d.caseDTO
-        ? { id: d.caseDTO.id, title: d.caseDTO.title, caseType: d.caseDTO.caseType }
-        : null,
-    }));
-  })) as AstreaDocumentScope[];
-
-  const documentos = rawDocs.map(mapDocumentScope);
   logger.debug(
-    { contactId, count: documentos.length },
-    'Documentos do contato obtidos com sucesso.',
+    { contactId, count: documentos.length, pages },
+    'Documentos do contato obtidos via REST.',
   );
   return documentos;
 }
@@ -1347,10 +1314,26 @@ async function buscarDocumentosContato(page: Page, contactId: string): Promise<D
 //   → POST /api/v2/contact/all (busca) → pega o primeiro resultado
 //   → GET /api/v2/contact/{id}/details
 //
-// A resposta inclui urlDrive, e a lista de documentos da aba "Documentos".
+// Por padrão NÃO carrega a aba "Documentos" (scrape lento e frágil: 15-45s
+// quando o DOM do Astrea muda e cai em retry). Habilite com
+// `incluirDocumentos: true` apenas quando o caller realmente precisa do
+// array `documentos[]`.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function buscarCliente(idOrNomeCpf: string): Promise<ServiceResponse<Cliente>> {
+export interface BuscarClienteOpts {
+  /**
+   * Se true, faz scrape da aba "Documentos" do contato (lento — 1-15s no
+   * caminho feliz, 45s+ em retry quando o DOM muda). Default false.
+   * Habilite só quando o caller precisa dos documentos.
+   */
+  incluirDocumentos?: boolean;
+}
+
+export async function buscarCliente(
+  idOrNomeCpf: string,
+  opts: BuscarClienteOpts = {},
+): Promise<ServiceResponse<Cliente>> {
+  const incluirDocumentos = opts.incluirDocumentos ?? false;
   try {
     const data = await withBrowserContext(async (page) => {
       // Garante que o app AngularJS está carregado
@@ -1364,7 +1347,7 @@ export async function buscarCliente(idOrNomeCpf: string): Promise<ServiceRespons
 
         const listResponse = await astreaApiPost<AstreaContactListResponse>(
           page,
-          `${ASTREA_API}/contact/all`,
+          `/contact/all`,
           buildSearchPayload({ text: contactId }, 0, 1),
         );
 
@@ -1378,7 +1361,7 @@ export async function buscarCliente(idOrNomeCpf: string): Promise<ServiceRespons
 
       const details = await astreaApiGet<AstreaContactDetails>(
         page,
-        `${ASTREA_API}/contact/${contactId}/details`,
+        `/contact/${contactId}/details`,
       ).catch((err: unknown) => {
         if (err instanceof Error && err.message.includes('API_ERROR_404')) {
           throw new Error('NOT_FOUND: Contato não encontrado');
@@ -1388,13 +1371,16 @@ export async function buscarCliente(idOrNomeCpf: string): Promise<ServiceRespons
 
       const cliente = mapContactDetails(details);
 
-      // Buscar documentos do contato via scraping do scope AngularJS
-      cliente.documentos = await buscarDocumentosContato(page, contactId);
+      if (incluirDocumentos) {
+        // Scrape opcional da aba "Documentos" (caminho lento)
+        cliente.documentos = await buscarDocumentosContato(page, contactId);
 
-      // Fallback: se o campo "Site" do cadastro não tem a pasta Drive, tentar
-      // derivar da lista de documentos (tipo DTE_DRIVE ou URL com /drive/folders/).
-      if (!cliente.urlDrive && cliente.documentos?.length) {
-        cliente.urlDrive = findUrlPastaDriveNosDocumentos(cliente.documentos);
+        // Fallback do urlDrive só faz sentido com documentos carregados.
+        // O caminho rápido (sem documentos) já tenta extrair do `webSites[]`
+        // do /details em mapContactDetails.
+        if (!cliente.urlDrive && cliente.documentos?.length) {
+          cliente.urlDrive = findUrlPastaDriveNosDocumentos(cliente.documentos);
+        }
       }
 
       return cliente;

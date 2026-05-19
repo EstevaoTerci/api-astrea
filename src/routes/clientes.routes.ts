@@ -280,7 +280,10 @@ router.patch('/:id', async (req: Request, res: Response, next: NextFunction) => 
 router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
-    const result = await buscarCliente(id);
+    const incluirDocumentosRaw = req.query['incluirDocumentos'];
+    const incluirDocumentos =
+      incluirDocumentosRaw === 'true' || incluirDocumentosRaw === '1';
+    const result = await buscarCliente(id, { incluirDocumentos });
 
     if (!result.ok) {
       const error: ApiError = {
