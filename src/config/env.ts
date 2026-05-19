@@ -15,7 +15,10 @@ const envSchema = z.object({
   TRUST_PROXY: z.coerce.number().int().min(0).default(0),
 
   // Configurações do pool de browsers
-  BROWSER_POOL_SIZE: z.coerce.number().int().min(1).max(10).default(3),
+  // Teto = 5 propositalmente: cada Chromium extra custa ~250 MB RAM E aumenta
+  // o risco de a Astrea (servidor externo) detectar uso indevido da conta
+  // (múltiplas abas paralelas na mesma sessão logada). Pool > 5 não é seguro.
+  BROWSER_POOL_SIZE: z.coerce.number().int().min(1).max(5).default(3),
   BROWSER_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
   BROWSER_IDLE_TTL_MS: z.coerce.number().int().min(0).default(900000),
   BROWSER_EXECUTABLE_PATH: z.string().optional(),
@@ -30,9 +33,9 @@ const envSchema = z.object({
     .transform((v) => v !== 'false')
     .default('true'),
 
-  // Rate limiting
-  RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60000),
-  RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(30),
+  // Rate limiting (por IP, retorna 429 + Retry-After quando excedido)
+  RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
+  RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(50),
 
   // Fila de requisições (RequestQueue)
   QUEUE_MAX_SIZE: z.coerce.number().int().min(1).max(100).default(20),

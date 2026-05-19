@@ -1,5 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { browserPool } from '../browser/pool.js';
+import { getListarClientesCacheStats } from '../services/clientes.service.js';
+import { getRateLimiterStats } from '../middleware/rate-limiter.js';
 
 const router = Router();
 
@@ -13,6 +15,10 @@ router.get('/', (_req: Request, res: Response) => {
     uptime: Math.floor(process.uptime()),
     pool: poolStats,
     queue: queueStats,
+    cache: {
+      listarClientes: getListarClientesCacheStats(),
+    },
+    rateLimit: getRateLimiterStats(),
     memory: {
       heapUsed: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
       heapTotal: Math.round(process.memoryUsage().heapTotal / 1024 / 1024),

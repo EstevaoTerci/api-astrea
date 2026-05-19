@@ -10,6 +10,7 @@ import { navigateTo } from '../browser/navigator.js';
 import { isRetryablePlaywrightError } from '../utils/retry.js';
 import { logger } from '../utils/logger.js';
 import { urlContato } from '../utils/astrea-urls.js';
+import { InflightTtlCache, type InflightCacheStats } from '../utils/cache.js';
 import type {
   Cliente,
   ClienteResumido,
@@ -428,11 +429,54 @@ function buildSearchPayload(
 //     GET /api/v2/contact/{id}/details → enriquece com urlDrive, cpfCnpj, etc.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Cache de listarClientes — TTL curto + inflight dedup
+//
+// Motivação: varredor de aniversariantes (consumer) dispara N chamadas pra
+// `mesAniversario={1..12}` em janela curta, e múltiplos consumers/retries
+// podem chegar simultaneamente pedindo o mesmo mês. Cachear o resultado por
+// 60s (curto o bastante para refletir cadastros recentes) deduplica chamadas
+// e tira carga do browser pool.
+//
+// Aplicado APENAS para filtros estruturais (mesAniversario, estado, etiquetas).
+// Buscas livres (nome, cpfCnpj, email) têm cardinalidade alta — pulam cache.
+// ─────────────────────────────────────────────────────────────────────────────
+
+type ListarClientesPayload = { clientes: Cliente[]; meta: PaginationMeta };
+
+const LISTAR_CLIENTES_CACHE_TTL_MS = 60_000;
+
+const listarClientesCache = new InflightTtlCache<ListarClientesPayload>(
+  LISTAR_CLIENTES_CACHE_TTL_MS,
+);
+
+export function getListarClientesCacheStats(): InflightCacheStats {
+  return listarClientesCache.stats;
+}
+
+function shouldBypassCache(filtros?: FiltrosCliente): boolean {
+  if (!filtros) return false;
+  return !!(filtros.nome?.trim() || filtros.cpfCnpj?.trim() || filtros.email?.trim());
+}
+
+function buildListarClientesCacheKey(filtros?: FiltrosCliente): string {
+  return JSON.stringify({
+    mesAniversario: filtros?.mesAniversario ?? null,
+    estado: filtros?.estado ?? null,
+    etiquetasIds: filtros?.etiquetasIds ? [...filtros.etiquetasIds].sort((a, b) => a - b) : null,
+    apenasComEmail: filtros?.apenasComEmail ?? null,
+    buscarEmEmpresa: filtros?.buscarEmEmpresa ?? null,
+    pagina: filtros?.pagina ?? 1,
+    limite: filtros?.limite ?? 50,
+  });
+}
+
 export async function listarClientes(
   filtros?: FiltrosCliente,
 ): Promise<ServiceResponse<Cliente[]>> {
   try {
-    const data = await withBrowserContext(async (page) => {
+    const loader = async (): Promise<ListarClientesPayload> =>
+      withBrowserContext(async (page) => {
       // Garante que o app AngularJS está carregado (necessário para $http interceptors)
       await navigateTo(page, ANGULAR_PAGE_PATH);
 
@@ -537,6 +581,10 @@ export async function listarClientes(
 
       return { clientes, meta };
     });
+
+    const data = shouldBypassCache(filtros)
+      ? await loader()
+      : await listarClientesCache.get(buildListarClientesCacheKey(filtros), loader);
 
     return { ok: true, data: data.clientes, meta: data.meta };
   } catch (err) {
