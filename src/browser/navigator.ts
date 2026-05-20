@@ -6,10 +6,42 @@ import { cleanText } from '../utils/sanitize.js';
 const ASTREA_URL = 'https://astrea.net.br';
 
 /**
+ * Extrai a rota Angular (parte depois de `#/`) de uma URL completa.
+ * Retorna `null` se a URL não tem hash route.
+ */
+function getAngularRoute(url: string): string | null {
+  const i = url.indexOf('#/');
+  return i === -1 ? null : url.slice(i + 2);
+}
+
+/**
  * Navega para uma URL do Astrea aguardando o carregamento completo da SPA.
+ *
+ * Otimização de warm-up: se a aba já está na rota Angular pedida E o
+ * `window.angular` ainda está disponível, pula `page.goto`. O pool reutiliza
+ * abas entre chamadas — sem isso, cada chamada paga ~10s de boot da SPA
+ * (firebase, environment/init, user-verify, alerts/query, etc).
+ *
+ * Só pulamos com MATCH EXATO da rota — depois de operações que alteram a
+ * rota via `$state.go` (ex: mesclarClientes), a próxima chamada navega
+ * normalmente.
  */
 export async function navigateTo(page: Page, path: string): Promise<void> {
   const url = path.startsWith('http') ? path : `${ASTREA_URL}${path}`;
+
+  const currentRoute = getAngularRoute(page.url());
+  const targetRoute = getAngularRoute(url);
+
+  if (currentRoute !== null && targetRoute !== null && currentRoute === targetRoute) {
+    const angularReady = await page
+      .evaluate(() => !!(window as unknown as { angular?: unknown }).angular)
+      .catch(() => false);
+
+    if (angularReady) {
+      logger.debug({ url }, 'Já na rota com Angular ativo; pulando navegação (warm-up).');
+      return;
+    }
+  }
 
   logger.debug({ url }, 'Navegando para URL...');
 
