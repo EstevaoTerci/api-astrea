@@ -19,9 +19,24 @@ Se a fila estiver acumulando consistentemente com pool=5, a resposta não é "su
 
 ### Cache + rate limit
 
-- `listarClientes` tem cache server-side com TTL 60s + inflight dedup ([src/utils/cache.ts](src/utils/cache.ts), `InflightTtlCache`). Só cobre filtros estruturais (mesAniversario, estado, etiquetas); buscas livres (nome/cpfCnpj/email) pulam cache por cardinalidade alta.
+- `listarClientes` e `listarAniversariantesEnriquecidos` têm cache server-side com TTL 60s + inflight dedup ([src/utils/cache.ts](src/utils/cache.ts), `InflightTtlCache`). Só cobrem filtros estruturais (mesAniversario, estado, etiquetas); buscas livres (nome/cpfCnpj/email) pulam cache por cardinalidade alta.
 - Rate limit é por IP, default 50 req/60s ([src/middleware/rate-limiter.ts](src/middleware/rate-limiter.ts)). Excedente recebe 429 com `Retry-After`. Cobre defesa contra retry-storm de consumer mal-comportado.
 - Ambos expostos em `GET /health` em `cache.*` e `rateLimit.*`.
+
+## Doutrina de endpoints
+
+### REST direto > DOM scrape
+
+A primeira pergunta ao implementar qualquer fluxo novo: **existe endpoint REST nativo do Astrea pra isso?** A resposta foi "sim" para cada caso já investigado (`/case/query`, `/documents/all`, `/calendar-pro/complete`, `/contact/all`, `/report/contactdetail`). DOM scrape com Playwright (`$state.go` + `waitForSelector` + leitura de scope) é frágil, lento (15-45s por chamada quando o DOM muda), e o Astrea altera o HTML sem aviso.
+
+Quando precisar descobrir um endpoint, use Playwright em modo visível (`headless: false`) e capture as requests da UI real — registrar listeners de network ANTES de qualquer ação, e atenção a abas novas (`context.on('page')` é essencial pra rastrear janelas que o Astrea abre via `target=_blank` ou `window.open`). Padrão de script de discovery em [scripts/discover-birthdays-batch.mjs](scripts/discover-birthdays-batch.mjs).
+
+### Endpoint preferido por caso de uso
+
+- **Varredura de aniversariantes** (`mesAniversario` em janelas de dias/mês): use `listar_aniversariantes(mes)` — retorna `Cliente[]` JÁ com `dataNascimento`, `cpfCnpj`, telefone, email em UMA chamada. NÃO use o padrão antigo `listar_todos_clientes(mes) + N×buscar_cliente(id)` — esse caminho ainda existe, mas custa N round-trips em vez de 1.
+- **Buscar 1 contato específico por id**: `buscar_cliente(id)` (sem `incluirDocumentos`). Default é rápido; passe `{incluirDocumentos: true}` apenas se realmente precisa do array `documentos[]`.
+- **Lista paginada com filtros para UI** (busca por nome, cpf, etc): `listar_clientes(...)`.
+- **Lista completa simples** (só id+nome+telefone, sem birthDate/cpf): `listar_todos_clientes(...)`. Mais leve que `listar_aniversariantes`, mas NÃO traz dados de cadastro completos.
 
 ## Desenvolvimento (modo dev)
 
