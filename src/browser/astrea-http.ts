@@ -7,6 +7,13 @@ import { logger } from '../utils/logger.js';
 export const ASTREA_API = 'https://app.astrea.net.br/api/v2';
 
 /**
+ * Base URL "app" — sem o prefixo `/api/v2`. Necessário para endpoints
+ * "internos" do Astrea fora da REST API tradicional, como
+ * `/report/contactdetail` (lê o resultado de `prepare-list-report`).
+ */
+export const ASTREA_APP = 'https://app.astrea.net.br';
+
+/**
  * Base URL dos endpoints GCP Cloud Endpoints (folders/v1, workspace/v1, users/v1).
  * Usar em conjunto com `astreaGapiPost`/`astreaGapiGet` para chamar saveCase,
  * saveLawsuit, getCaseById sem precisar carregar `gapi.client.folders` no DOM.
@@ -167,6 +174,28 @@ export async function astreaApiPut<T>(page: Page, path: string, body: unknown): 
     },
     { url: `${ASTREA_API}${path}`, body },
   );
+}
+
+/**
+ * GET para endpoints "app" do Astrea (fora de `/api/v2`), ex.: `/report/contactdetail`.
+ * Mesma autenticação via Angular `$http` (interceptors injetam Bearer token).
+ */
+export async function astreaAppGet<T>(page: Page, path: string): Promise<T> {
+  return page.evaluate(async (url: string) => {
+    const http = (window as any).angular?.element(document.body)?.injector()?.get('$http');
+    if (!http) throw new Error('Angular $http não disponível');
+
+    try {
+      const res = await http.get(url);
+      return res.data as T;
+    } catch (err: any) {
+      const status = err?.status ?? 'UNKNOWN';
+      const rawMessage =
+        err?.data?.errorMessage ?? err?.data ?? err?.message ?? err?.statusText ?? err;
+      const detail = typeof rawMessage === 'string' ? rawMessage : JSON.stringify(rawMessage);
+      throw new Error(`API_ERROR_${status}: ${detail}`);
+    }
+  }, `${ASTREA_APP}${path}`);
 }
 
 /** DELETE para a API REST do Astrea via Angular $http. */

@@ -3,6 +3,7 @@ import {
   withBrowserContext,
   astreaApiGet,
   astreaApiPost,
+  astreaAppGet,
   getAstreaUserId,
   ASTREA_API,
 } from '../browser/astrea-http.js';
@@ -1445,6 +1446,248 @@ export async function buscarCliente(
           err instanceof Error ? err.message.replace(/^NOT_FOUND:\s*/, '') : 'Erro desconhecido',
         code: isNotFound ? 'NOT_FOUND' : 'SCRAPE_ERROR',
         retryable: !isNotFound,
+      },
+    };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Service: Listar Aniversariantes (com enriquecimento completo)
+//
+// GET /api/clientes/aniversariantes?mes=N[&estado=UF][&etiquetasIds=1,2]
+//
+// Substitui o fluxo antigo:
+//   listar_todos_clientes({mesAniversario: N})  ← lista resumida, SEM birthDate/cpf
+//   + N × buscar_cliente(id)                     ← uma chamada por cliente para enriquecer
+//
+// Por uma única chamada que devolve `Cliente[]` JÁ enriquecido com:
+//   - dataNascimento (ISO yyyy-MM-dd)
+//   - cpfCnpj
+//   - telefone, email, endereço, urlDrive, tipo, origem
+//
+// Discovery em 2026-05-19 (chrome-devtools MCP) capturando o tráfego real
+// da função "Ficha completa" da tela de Contatos. O fluxo é um trio:
+//
+//   1. POST /api/v2/contact/all/count  com queryDTO{ birthMonth: N, ... }
+//      → registra o filtro na sessão server-side do user.
+//   2. POST /api/v2/contact/prepare-list-report  { contactIds:[], userId }
+//      → devolve { reportId, requesterUrl }.
+//   3. GET /report/contactdetail?report=<id>&user=<uid>&cursor=&limit=100
+//      → contacts[] com TODOS os campos, paginado por cursor.
+//
+// O `prepare-list-report` NÃO aceita filtros no body — ele lê o queryDTO
+// mais recente da sessão. Por isso a etapa 1 é obrigatória mesmo que já
+// soubéssemos a contagem, e tudo precisa rodar na MESMA page do pool
+// (sessão browser = sessão server-side).
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface AstreaReportContact {
+  id: number;
+  name: string;
+  nickname?: string;
+  /** Data de nascimento no formato `dd/MM/yyyy` (formato BR do report). */
+  birth?: string;
+  taxDocumentNumber?: string;
+  idDocumentNumber?: string;
+  clientOrigin?: string;
+  classificationName?: string;
+  person?: boolean;
+  simpleNational?: boolean;
+  death?: string;
+  sites?: Array<{ url?: string } | string>;
+  telephones?: AstreaPhone[];
+  emails?: AstreaEmail[];
+  addresses?: AstreaAddress[];
+  /** No report vem como `dd/MM/yyyy`. */
+  createdAt?: string;
+}
+
+interface AstreaReportContactDetailResponse {
+  contacts?: AstreaReportContact[];
+  cursor?: string;
+}
+
+interface AstreaPrepareListReportResponse {
+  reportId?: number;
+  requesterUrl?: string;
+}
+
+export interface FiltrosAniversariantes {
+  /** Mês de aniversário (1-12). */
+  mes: number;
+  /** Filtro adicional opcional por UF. */
+  estado?: string;
+  /** IDs das etiquetas (tags) para filtrar. */
+  etiquetasIds?: number[];
+}
+
+/** Converte `"14/06/1966"` em `"1966-06-14"` (ISO). Retorna undefined se inválido. */
+function parseBirthBrToIso(br: string | undefined): string | undefined {
+  if (!br) return undefined;
+  const m = br.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!m) return undefined;
+  return `${m[3]}-${m[2]}-${m[1]}`;
+}
+
+function extractReportSiteUrl(sites: AstreaReportContact['sites']): string | undefined {
+  if (!Array.isArray(sites)) return undefined;
+  for (const s of sites) {
+    const url = typeof s === 'string' ? s : s?.url;
+    if (url && url.trim() !== '') return url.trim();
+  }
+  return undefined;
+}
+
+function mapReportContactToCliente(c: AstreaReportContact): Cliente {
+  const id = String(c.id);
+
+  const telefone =
+    c.telephones?.find((t) => t.typeEnum?.includes('CELLULAR') || t.typeEnum === 'WHATSAPP')
+      ?.telephone ??
+    c.telephones?.[0]?.telephone ??
+    undefined;
+
+  const email = c.emails?.[0]?.address ?? (c.emails?.[0] as { email?: string })?.email ?? undefined;
+
+  const urlDrive = extractReportSiteUrl(c.sites);
+
+  const enderecoRaw = c.addresses?.[0] as { display?: string; value?: string } | undefined;
+  const endereco = enderecoRaw?.display ?? enderecoRaw?.value ?? undefined;
+
+  return {
+    id,
+    nome: c.name?.trim() ?? '',
+    url: urlContato(id),
+    cpfCnpj: c.taxDocumentNumber?.trim() || undefined,
+    email,
+    telefone,
+    urlDrive,
+    endereco,
+    dataNascimento: parseBirthBrToIso(c.birth),
+    origem: c.clientOrigin?.trim() || undefined,
+    tipo:
+      c.person === true
+        ? 'pessoa_fisica'
+        : c.person === false
+          ? 'pessoa_juridica'
+          : undefined,
+    createdAt: c.createdAt || undefined,
+  };
+}
+
+// ── Cache (mesma doutrina do listarClientes: TTL 60s + inflight dedup) ─────
+
+const ANIVERSARIANTES_CACHE_TTL_MS = 60_000;
+const aniversariantesCache = new InflightTtlCache<Cliente[]>(ANIVERSARIANTES_CACHE_TTL_MS);
+
+export function getAniversariantesCacheStats(): InflightCacheStats {
+  return aniversariantesCache.stats;
+}
+
+function buildAniversariantesCacheKey(filtros: FiltrosAniversariantes): string {
+  return JSON.stringify({
+    mes: filtros.mes,
+    estado: filtros.estado ?? null,
+    etiquetasIds: filtros.etiquetasIds
+      ? [...filtros.etiquetasIds].sort((a, b) => a - b)
+      : null,
+  });
+}
+
+const REPORT_PAGE_SIZE = 100;
+const REPORT_MAX_PAGES = 50;
+
+async function fetchRelatorioAniversariantes(
+  page: Page,
+  filtros: FiltrosAniversariantes,
+): Promise<Cliente[]> {
+  const userId = await getAstreaUserId(page);
+
+  const queryDTO = buildQueryDTO({
+    mesAniversario: filtros.mes,
+    estado: filtros.estado,
+    etiquetasIds: filtros.etiquetasIds,
+  });
+
+  // 1. Registra o filtro na sessão server-side.
+  await astreaApiPost<{ count?: number }>(page, `/contact/all/count`, {
+    queryCursor: null,
+    limit: 30,
+    queryDTO,
+    userId,
+  });
+
+  // 2. Cria o reportId vinculado ao queryDTO recém-registrado.
+  const prepare = await astreaApiPost<AstreaPrepareListReportResponse>(
+    page,
+    `/contact/prepare-list-report`,
+    { contactIds: [], userId },
+  );
+
+  const reportId = prepare.reportId;
+  if (reportId == null) {
+    throw new Error('API_ERROR: prepare-list-report não devolveu reportId');
+  }
+
+  // 3. Paginação por cursor sobre o relatório.
+  const contatos: AstreaReportContact[] = [];
+  let cursor = '';
+  let pages = 0;
+
+  while (pages < REPORT_MAX_PAGES) {
+    const path =
+      `/report/contactdetail` +
+      `?cursor=${encodeURIComponent(cursor)}` +
+      `&limit=${REPORT_PAGE_SIZE}` +
+      `&report=${reportId}` +
+      `&user=${encodeURIComponent(userId)}`;
+
+    const resp = await astreaAppGet<AstreaReportContactDetailResponse>(page, path);
+    const list = resp.contacts ?? [];
+    contatos.push(...list);
+
+    if (!resp.cursor || list.length === 0) break;
+    cursor = resp.cursor;
+    pages++;
+  }
+
+  logger.debug(
+    { mes: filtros.mes, total: contatos.length, pages },
+    'Aniversariantes obtidos via relatório.',
+  );
+
+  return contatos.map(mapReportContactToCliente);
+}
+
+export async function listarAniversariantesEnriquecidos(
+  filtros: FiltrosAniversariantes,
+): Promise<ServiceResponse<Cliente[]>> {
+  try {
+    const data = await aniversariantesCache.get(
+      buildAniversariantesCacheKey(filtros),
+      () =>
+        withBrowserContext(async (page) => {
+          await navigateTo(page, ANGULAR_PAGE_PATH);
+          return fetchRelatorioAniversariantes(page, filtros);
+        }),
+    );
+
+    return {
+      ok: true,
+      data,
+      meta: { pagina: 1, limite: data.length, total: data.length },
+    };
+  } catch (err) {
+    logger.error({ err, filtros }, 'Erro em listarAniversariantesEnriquecidos');
+    return {
+      ok: false,
+      error: {
+        message: err instanceof Error ? err.message : 'Erro desconhecido',
+        code:
+          err instanceof Error && err.message.includes('BROWSER_POOL_TIMEOUT')
+            ? 'BROWSER_UNAVAILABLE'
+            : 'SCRAPE_ERROR',
+        retryable: isRetryablePlaywrightError(err),
       },
     };
   }

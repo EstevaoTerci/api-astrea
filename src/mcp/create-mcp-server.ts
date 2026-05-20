@@ -7,6 +7,7 @@ import {
   listarClientes,
   buscarCliente as buscarClientePorId,
   listarTodosClientes,
+  listarAniversariantesEnriquecidos,
 } from '../services/clientes.service.js';
 import {
   buscarCaso as buscarCasoPorId,
@@ -108,7 +109,7 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'listar_todos_clientes',
-    'Lista todos os clientes (resumido, sem paginação). Aceita filtros nativos do Astrea aplicados server-side: `mesAniversario` (1-12), `estado` (UF), `etiquetasIds` (IDs das tags), `apenasComEmail`. Use `mesAniversario` para responder "quem faz aniversário em <mês>" sem chamar `buscar_cliente` por ID — uma única chamada já filtra. Cada item inclui `url` com o link direto do contato no app do Astrea.',
+    'Lista todos os clientes (resumido, sem paginação). Aceita filtros nativos do Astrea aplicados server-side: `mesAniversario` (1-12), `estado` (UF), `etiquetasIds` (IDs das tags), `apenasComEmail`. Use `mesAniversario` para responder "quem faz aniversário em <mês>" sem chamar `buscar_cliente` por ID — uma única chamada já filtra. Cada item inclui `url` com o link direto do contato no app do Astrea. ATENÇÃO: para varredura de aniversariantes, prefira `listar_aniversariantes` — devolve a lista JÁ enriquecida (com `dataNascimento`, `cpfCnpj`, telefone, email) em UMA chamada, dispensando o passo de `buscar_cliente` por ID.',
     {
       mesAniversario: z.number().int().min(1).max(12).optional(),
       estado: z.string().length(2).optional(),
@@ -117,6 +118,30 @@ export function createMcpServer(): McpServer {
     },
     async (input) => {
       const result = await listarTodosClientes(input);
+      if (!result.ok) {
+        return {
+          content: [{ type: 'text', text: `Erro: ${result.error.message}` }],
+          isError: true,
+        };
+      }
+      const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
+      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
+    },
+  );
+
+  server.tool(
+    'listar_aniversariantes',
+    'Retorna aniversariantes de um mês JÁ ENRIQUECIDOS com `dataNascimento` (ISO yyyy-MM-dd), `cpfCnpj`, telefone, email, endereço, urlDrive, tipo (pessoa_fisica/juridica) e origem — em UMA única chamada (independentemente de quantos aniversariantes existirem). Substitui o fluxo antigo `listar_todos_clientes({mesAniversario:N})` + N×`buscar_cliente(id)`, que fazia dezenas de chamadas. Use para varredura de aniversariantes / mensagens automáticas.',
+    {
+      mes: z.number().int().min(1).max(12).describe('Mês do aniversário (1-12).'),
+      estado: z.string().length(2).optional().describe('Filtro opcional por UF (ex: ES).'),
+      etiquetasIds: z
+        .array(z.number().int().positive())
+        .optional()
+        .describe('IDs das tags para filtrar.'),
+    },
+    async (input) => {
+      const result = await listarAniversariantesEnriquecidos(input);
       if (!result.ok) {
         return {
           content: [{ type: 'text', text: `Erro: ${result.error.message}` }],

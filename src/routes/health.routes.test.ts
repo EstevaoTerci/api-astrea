@@ -35,6 +35,13 @@ vi.mock('../services/clientes.service.js', () => ({
     entries: 2,
     hitRatio: 0.7,
   }),
+  getAniversariantesCacheStats: vi.fn().mockReturnValue({
+    hits: 12,
+    misses: 1,
+    inflightShared: 0,
+    entries: 1,
+    hitRatio: 0.923,
+  }),
 }));
 
 vi.mock('../middleware/rate-limiter.js', () => ({
@@ -47,7 +54,10 @@ vi.mock('../middleware/rate-limiter.js', () => ({
 }));
 
 import healthRouter from './health.routes.js';
-import { getListarClientesCacheStats } from '../services/clientes.service.js';
+import {
+  getListarClientesCacheStats,
+  getAniversariantesCacheStats,
+} from '../services/clientes.service.js';
 import { getRateLimiterStats } from '../middleware/rate-limiter.js';
 
 function buildHealthApp() {
@@ -115,6 +125,19 @@ describe('GET /health', () => {
       hitRatio: 0.7,
     });
     expect(getListarClientesCacheStats).toHaveBeenCalled();
+  });
+
+  it('expõe stats do cache de aniversariantes', async () => {
+    const res = await request(buildHealthApp()).get('/health');
+
+    expect(res.body.cache.aniversariantes).toEqual({
+      hits: 12,
+      misses: 1,
+      inflightShared: 0,
+      entries: 1,
+      hitRatio: 0.923,
+    });
+    expect(getAniversariantesCacheStats).toHaveBeenCalled();
   });
 
   it('expõe stats do rate limiter (incluindo blockedTotal)', async () => {

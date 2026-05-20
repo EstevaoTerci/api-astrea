@@ -8,9 +8,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../browser/astrea-http.js', () => ({
   ASTREA_API: 'https://app.astrea.net.br/api/v2',
+  ASTREA_APP: 'https://app.astrea.net.br',
   withBrowserContext: vi.fn(<T>(op: (page: unknown) => Promise<T>) => op({})),
   astreaApiGet: vi.fn(),
   astreaApiPost: vi.fn(),
+  astreaAppGet: vi.fn(),
   getAstreaUserId: vi.fn().mockResolvedValue('1234567890'),
 }));
 
@@ -24,13 +26,16 @@ import {
   atualizarCliente,
   listarClientes,
   listarTodosClientes,
+  listarAniversariantesEnriquecidos,
   mesclarClientes,
   getListarClientesCacheStats,
+  getAniversariantesCacheStats,
 } from './clientes.service.js';
-import { astreaApiGet, astreaApiPost } from '../browser/astrea-http.js';
+import { astreaApiGet, astreaApiPost, astreaAppGet } from '../browser/astrea-http.js';
 
 const mockGet = vi.mocked(astreaApiGet);
 const mockPost = vi.mocked(astreaApiPost);
+const mockAppGet = vi.mocked(astreaAppGet);
 
 // Fixtures de respostas do Astrea
 function makeContactListItem(overrides: Partial<{
@@ -94,6 +99,7 @@ beforeEach(() => {
   // `withBrowserContext` mantém sua impl porque é setada no vi.mock acima.
   mockGet.mockReset();
   mockPost.mockReset();
+  mockAppGet.mockReset();
   // Cache do listarClientes é singleton — confiamos em chaves distintas + bypass
   // por nome/cpf para isolar testes.
 });
@@ -571,6 +577,195 @@ describe('mesclarClientes — validação', () => {
 describe('getListarClientesCacheStats', () => {
   it('retorna estrutura com hits, misses, hitRatio', () => {
     const stats = getListarClientesCacheStats();
+    expect(stats).toHaveProperty('hits');
+    expect(stats).toHaveProperty('misses');
+    expect(stats).toHaveProperty('inflightShared');
+    expect(stats).toHaveProperty('entries');
+    expect(stats).toHaveProperty('hitRatio');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// listarAniversariantesEnriquecidos
+//
+// Fluxo trio: POST /contact/all/count → POST /contact/prepare-list-report
+// → GET /report/contactdetail (paginado por cursor).
+// O service mapeia AstreaReportContact → Cliente com `birth` ("dd/MM/yyyy")
+// convertido para ISO, `taxDocumentNumber` → `cpfCnpj`, telefone, email, etc.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function makeReportContact(overrides: Partial<{
+  id: number;
+  name: string;
+  nickname: string;
+  birth: string;
+  taxDocumentNumber: string;
+  clientOrigin: string;
+  person: boolean;
+  telephones: any[];
+  emails: any[];
+  addresses: any[];
+  sites: any[];
+  createdAt: string;
+}> = {}) {
+  return {
+    id: 5312778616111104,
+    name: 'Airton Florentino',
+    nickname: 'Airton Florentino',
+    birth: '14/06/1966',
+    taxDocumentNumber: '003.262.217-19',
+    clientOrigin: 'Espontâneo',
+    person: true,
+    classificationName: 'Cliente',
+    telephones: [{ typeEnum: 'PERSONAL_CELLULAR', telephone: '(27) 99924-0611' }],
+    emails: [{ address: 'airton@example.com' }],
+    addresses: [{ display: 'Corrego da Prata, sn — Itaperuna' }],
+    sites: [],
+    createdAt: '12/06/2025',
+    ...overrides,
+  };
+}
+
+describe('listarAniversariantesEnriquecidos', () => {
+  it('dispara o trio count → prepare → contactdetail e mapeia para Cliente enriquecido', async () => {
+    // 1. count (registra filtro server-side)
+    mockPost.mockResolvedValueOnce({ count: 1 });
+    // 2. prepare-list-report → reportId
+    mockPost.mockResolvedValueOnce({ reportId: 6736588643532800, requesterUrl: '' });
+    // 3. /report/contactdetail → 1 contato, sem cursor (fim)
+    mockAppGet.mockResolvedValueOnce({
+      contacts: [makeReportContact()],
+      cursor: '',
+    });
+
+    const r = await listarAniversariantesEnriquecidos({ mes: 6 });
+
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+
+    // Trio chamado na ordem correta
+    expect(mockPost).toHaveBeenNthCalledWith(
+      1,
+      expect.anything(),
+      '/contact/all/count',
+      expect.objectContaining({
+        queryDTO: expect.objectContaining({ birthMonth: 6 }),
+        userId: '1234567890',
+      }),
+    );
+    expect(mockPost).toHaveBeenNthCalledWith(
+      2,
+      expect.anything(),
+      '/contact/prepare-list-report',
+      expect.objectContaining({ contactIds: [], userId: '1234567890' }),
+    );
+    expect(mockAppGet).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.stringMatching(
+        /^\/report\/contactdetail\?cursor=&limit=100&report=6736588643532800&user=1234567890$/,
+      ),
+    );
+
+    // Mapping enriquecido
+    expect(r.data).toHaveLength(1);
+    expect(r.data[0]).toMatchObject({
+      id: '5312778616111104',
+      nome: 'Airton Florentino',
+      cpfCnpj: '003.262.217-19',
+      dataNascimento: '1966-06-14', // converteu dd/MM/yyyy → ISO
+      telefone: '(27) 99924-0611',
+      email: 'airton@example.com',
+      tipo: 'pessoa_fisica',
+      origem: 'Espontâneo',
+    });
+  });
+
+  it('pagina por cursor até receber cursor vazio', async () => {
+    mockPost.mockResolvedValueOnce({ count: 2 });
+    mockPost.mockResolvedValueOnce({ reportId: 999, requesterUrl: '' });
+    // Página 1: cursor não-vazio (tem próxima)
+    mockAppGet.mockResolvedValueOnce({
+      contacts: [makeReportContact({ id: 1, name: 'A' })],
+      cursor: 'Cm4KLk...',
+    });
+    // Página 2: cursor vazio (fim)
+    mockAppGet.mockResolvedValueOnce({
+      contacts: [makeReportContact({ id: 2, name: 'B' })],
+      cursor: '',
+    });
+
+    const r = await listarAniversariantesEnriquecidos({ mes: 7 });
+
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data).toHaveLength(2);
+    expect(mockAppGet).toHaveBeenCalledTimes(2);
+  });
+
+  it('cacheia chamadas idênticas (segunda execução não dispara o trio)', async () => {
+    mockPost.mockResolvedValueOnce({ count: 0 });
+    mockPost.mockResolvedValueOnce({ reportId: 12345, requesterUrl: '' });
+    mockAppGet.mockResolvedValueOnce({ contacts: [], cursor: '' });
+
+    const r1 = await listarAniversariantesEnriquecidos({ mes: 8 });
+    const r2 = await listarAniversariantesEnriquecidos({ mes: 8 });
+
+    expect(r1.ok).toBe(true);
+    expect(r2.ok).toBe(true);
+    // Trio executou só 1 vez (count + prepare)
+    expect(mockPost).toHaveBeenCalledTimes(2);
+    expect(mockAppGet).toHaveBeenCalledTimes(1);
+  });
+
+  it('retorna erro quando prepare-list-report não devolve reportId', async () => {
+    mockPost.mockResolvedValueOnce({ count: 1 });
+    mockPost.mockResolvedValueOnce({}); // sem reportId
+
+    const r = await listarAniversariantesEnriquecidos({ mes: 9 });
+
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error.message).toMatch(/reportId/i);
+  });
+
+  it('mapeia person=false para tipo=pessoa_juridica', async () => {
+    mockPost.mockResolvedValueOnce({ count: 1 });
+    mockPost.mockResolvedValueOnce({ reportId: 1, requesterUrl: '' });
+    mockAppGet.mockResolvedValueOnce({
+      contacts: [makeReportContact({ id: 42, person: false, name: 'Empresa LTDA' })],
+      cursor: '',
+    });
+
+    const r = await listarAniversariantesEnriquecidos({ mes: 10 });
+
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data[0]).toMatchObject({
+      id: '42',
+      nome: 'Empresa LTDA',
+      tipo: 'pessoa_juridica',
+    });
+  });
+
+  it('retorna dataNascimento undefined quando birth está vazio ou mal formatado', async () => {
+    mockPost.mockResolvedValueOnce({ count: 1 });
+    mockPost.mockResolvedValueOnce({ reportId: 2, requesterUrl: '' });
+    mockAppGet.mockResolvedValueOnce({
+      contacts: [makeReportContact({ id: 43, birth: '' })],
+      cursor: '',
+    });
+
+    const r = await listarAniversariantesEnriquecidos({ mes: 11 });
+
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data[0].dataNascimento).toBeUndefined();
+  });
+});
+
+describe('getAniversariantesCacheStats', () => {
+  it('retorna estrutura compatível com InflightCacheStats', () => {
+    const stats = getAniversariantesCacheStats();
     expect(stats).toHaveProperty('hits');
     expect(stats).toHaveProperty('misses');
     expect(stats).toHaveProperty('inflightShared');

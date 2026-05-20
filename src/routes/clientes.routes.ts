@@ -4,6 +4,7 @@ import {
   atualizarCliente,
   buscarCliente,
   criarCliente,
+  listarAniversariantesEnriquecidos,
   listarClientes,
   listarTodosClientes,
   mesclarClientes,
@@ -65,6 +66,17 @@ const querySchema = z.object({
 });
 
 const queryTodosSchema = z.object(filtrosNativosSchema);
+
+const queryAniversariantesSchema = z.object({
+  mes: z.coerce.number().int().min(1).max(12),
+  estado: z
+    .string()
+    .trim()
+    .length(2)
+    .transform((v) => v.toUpperCase())
+    .optional(),
+  etiquetasIds: idsArraySchema,
+});
 
 const enderecoSchema = z.union([
   z.string(),
@@ -217,6 +229,40 @@ router.get('/todos', async (req: Request, res: Response, next: NextFunction) => 
   try {
     const filtros = queryTodosSchema.parse(req.query);
     const result = await listarTodosClientes(filtros);
+
+    if (!result.ok) {
+      const error: ApiError = {
+        success: false,
+        error: result.error.message,
+        code: result.error.code,
+      };
+      const status = result.error.code === 'BROWSER_UNAVAILABLE' ? 503 : 500;
+      res.status(status).json(error);
+      return;
+    }
+
+    const response: ApiResponse<typeof result.data> = {
+      success: true,
+      data: result.data,
+      meta: result.meta,
+    };
+    res.json(response);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /api/clientes/aniversariantes?mes=6[&estado=ES][&etiquetasIds=1,2]
+ *
+ * Retorna aniversariantes do mês JÁ enriquecidos (com `dataNascimento` em
+ * ISO, `cpfCnpj`, telefone, email, endereço, urlDrive). Uma única chamada
+ * cobre o que antes era `listar_todos_clientes(mes)` + N×`buscar_cliente(id)`.
+ */
+router.get('/aniversariantes', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const filtros = queryAniversariantesSchema.parse(req.query);
+    const result = await listarAniversariantesEnriquecidos(filtros);
 
     if (!result.ok) {
       const error: ApiError = {

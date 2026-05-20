@@ -36,3 +36,14 @@ Thumbs.db
 
 # Vitest coverage
 coverage/
+
+# Discovery: capturas de tráfego do Astrea (não commitar — contêm dados reais)
+scripts/birthdays-discovery-*.json
+scripts/birthdays-final-screenshot-*.png
+
+# Artefatos gerados pelo tsc para helpers de teste (build inadvertido)
+test/**/*.d.ts
+test/**/*.d.ts.map
+test/**/*.js
+test/**/*.js.map
+!test/**/*.test.ts

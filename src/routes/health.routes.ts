@@ -1,6 +1,9 @@
 import { Router, Request, Response } from 'express';
 import { browserPool } from '../browser/pool.js';
-import { getListarClientesCacheStats } from '../services/clientes.service.js';
+import {
+  getAniversariantesCacheStats,
+  getListarClientesCacheStats,
+} from '../services/clientes.service.js';
 import { getRateLimiterStats } from '../middleware/rate-limiter.js';
 
 const router = Router();
@@ -17,6 +20,7 @@ router.get('/', (_req: Request, res: Response) => {
     queue: queueStats,
     cache: {
       listarClientes: getListarClientesCacheStats(),
+      aniversariantes: getAniversariantesCacheStats(),
     },
     rateLimit: getRateLimiterStats(),
     memory: {

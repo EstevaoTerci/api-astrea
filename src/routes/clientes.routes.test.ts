@@ -12,6 +12,7 @@ import { errorHandler } from '../middleware/error-handler.js';
 vi.mock('../services/clientes.service.js', () => ({
   listarClientes: vi.fn(),
   listarTodosClientes: vi.fn(),
+  listarAniversariantesEnriquecidos: vi.fn(),
   buscarCliente: vi.fn(),
   criarCliente: vi.fn(),
   atualizarCliente: vi.fn(),
@@ -30,6 +31,7 @@ import clientesRouter from './clientes.routes.js';
 import {
   listarClientes,
   listarTodosClientes,
+  listarAniversariantesEnriquecidos,
   buscarCliente,
   criarCliente,
   atualizarCliente,
@@ -40,6 +42,7 @@ import { adicionarDocumentoLink } from '../services/documentos.service.js';
 
 const mockListar = vi.mocked(listarClientes);
 const mockListarTodos = vi.mocked(listarTodosClientes);
+const mockListarAniv = vi.mocked(listarAniversariantesEnriquecidos);
 const mockBuscar = vi.mocked(buscarCliente);
 const mockCriar = vi.mocked(criarCliente);
 const mockAtualizar = vi.mocked(atualizarCliente);
@@ -71,6 +74,7 @@ function buildClientesApp() {
 beforeEach(() => {
   mockListar.mockReset();
   mockListarTodos.mockReset();
+  mockListarAniv.mockReset();
   mockBuscar.mockReset();
   mockCriar.mockReset();
   mockAtualizar.mockReset();
@@ -180,6 +184,77 @@ describe('GET /api/clientes/todos', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.data).toEqual(lista);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/clientes/aniversariantes
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('GET /api/clientes/aniversariantes', () => {
+  it('200 com lista enriquecida (dataNascimento+cpfCnpj) quando mes válido', async () => {
+    const lista: Cliente[] = [
+      {
+        id: '5312778616111104',
+        nome: 'Airton Florentino',
+        url: 'https://astrea.net.br/#/main/contacts/detail/5312778616111104/data',
+        cpfCnpj: '003.262.217-19',
+        dataNascimento: '1966-06-14',
+        telefone: '(27) 99924-0611',
+        tipo: 'pessoa_fisica',
+      },
+    ];
+    mockListarAniv.mockResolvedValueOnce(ok(lista, { pagina: 1, limite: 1, total: 1 }));
+
+    const res = await request(buildClientesApp())
+      .get('/api/clientes/aniversariantes')
+      .query({ mes: 6 });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual(lista);
+    expect(mockListarAniv).toHaveBeenCalledWith({ mes: 6 });
+  });
+
+  it('400 quando mes está fora de 1..12', async () => {
+    const res = await request(buildClientesApp())
+      .get('/api/clientes/aniversariantes')
+      .query({ mes: 13 });
+
+    expect(res.status).toBe(400);
+    expect(mockListarAniv).not.toHaveBeenCalled();
+  });
+
+  it('400 quando mes ausente', async () => {
+    const res = await request(buildClientesApp()).get('/api/clientes/aniversariantes');
+
+    expect(res.status).toBe(400);
+    expect(mockListarAniv).not.toHaveBeenCalled();
+  });
+
+  it('propaga estado e etiquetasIds (CSV) ao service', async () => {
+    mockListarAniv.mockResolvedValueOnce(ok([], { pagina: 1, limite: 0, total: 0 }));
+
+    await request(buildClientesApp())
+      .get('/api/clientes/aniversariantes')
+      .query({ mes: 6, estado: 'es', etiquetasIds: '10,20' });
+
+    expect(mockListarAniv).toHaveBeenCalledWith({
+      mes: 6,
+      estado: 'ES', // uppercase aplicado pelo schema
+      etiquetasIds: [10, 20],
+    });
+  });
+
+  it('503 quando BROWSER_UNAVAILABLE', async () => {
+    mockListarAniv.mockResolvedValueOnce(
+      err({ code: 'BROWSER_UNAVAILABLE', message: 'pool cheio', retryable: true }),
+    );
+
+    const res = await request(buildClientesApp())
+      .get('/api/clientes/aniversariantes')
+      .query({ mes: 6 });
+
+    expect(res.status).toBe(503);
   });
 });
 
