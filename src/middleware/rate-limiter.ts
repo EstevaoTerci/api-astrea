@@ -40,10 +40,15 @@ export const rateLimiter = rateLimit({
     error: `Limite de requisições excedido. Tente novamente em ${Math.ceil(env.RATE_LIMIT_WINDOW_MS / 1000)} segundos.`,
     code: 'RATE_LIMIT_EXCEEDED',
   }),
-  handler: (_req, res, _next, options) => {
+  handler: (req, res, next, options) => {
     blockedTotal++;
     lastBlockedAt = Date.now();
-    res.status(options.statusCode).json(options.message);
+    // `options.message` é a função/valor passado em `message` acima. Em v7
+    // do express-rate-limit, esse campo NÃO é auto-resolvido quando é uma
+    // função, então um `res.json(fn)` vira body vazio (`JSON.stringify(fn) === undefined`).
+    const body =
+      typeof options.message === 'function' ? options.message(req, res, next, options) : options.message;
+    res.status(options.statusCode).json(body);
   },
   skip: (req) => req.path === '/health',
 });
