@@ -3,11 +3,11 @@ import {
   withBrowserContext,
   astreaApiGet,
   astreaApiPost,
-  astreaAppGet,
   getAstreaUserId,
   ASTREA_API,
 } from '../browser/astrea-http.js';
 import { navigateTo } from '../browser/navigator.js';
+import { isBrowserUnavailableError } from '../browser/login-state.js';
 import { isRetryablePlaywrightError } from '../utils/retry.js';
 import { logger } from '../utils/logger.js';
 import { urlContato } from '../utils/astrea-urls.js';
@@ -594,10 +594,7 @@ export async function listarClientes(
       ok: false,
       error: {
         message: err instanceof Error ? err.message : 'Erro desconhecido',
-        code:
-          err instanceof Error && err.message.includes('BROWSER_POOL_TIMEOUT')
-            ? 'BROWSER_UNAVAILABLE'
-            : 'SCRAPE_ERROR',
+        code: isBrowserUnavailableError(err) ? 'BROWSER_UNAVAILABLE' : 'SCRAPE_ERROR',
         retryable: isRetryablePlaywrightError(err),
       },
     };
@@ -660,10 +657,7 @@ export async function listarTodosClientes(
       ok: false,
       error: {
         message: err instanceof Error ? err.message : 'Erro desconhecido',
-        code:
-          err instanceof Error && err.message.includes('BROWSER_POOL_TIMEOUT')
-            ? 'BROWSER_UNAVAILABLE'
-            : 'SCRAPE_ERROR',
+        code: isBrowserUnavailableError(err) ? 'BROWSER_UNAVAILABLE' : 'SCRAPE_ERROR',
         retryable: isRetryablePlaywrightError(err),
       },
     };
@@ -1456,61 +1450,32 @@ export async function buscarCliente(
 //
 // GET /api/clientes/aniversariantes?mes=N[&estado=UF][&etiquetasIds=1,2]
 //
-// Substitui o fluxo antigo:
-//   listar_todos_clientes({mesAniversario: N})  ← lista resumida, SEM birthDate/cpf
-//   + N × buscar_cliente(id)                     ← uma chamada por cliente para enriquecer
-//
-// Por uma única chamada que devolve `Cliente[]` JÁ enriquecido com:
+// Devolve `Cliente[]` JÁ enriquecido com:
 //   - dataNascimento (ISO yyyy-MM-dd)
 //   - cpfCnpj
 //   - telefone, email, endereço, urlDrive, tipo, origem
 //
-// Discovery em 2026-05-19 (chrome-devtools MCP) capturando o tráfego real
-// da função "Ficha completa" da tela de Contatos. O fluxo é um trio:
+// Implementação sobre os endpoints REST ESTÁVEIS do Astrea (os mesmos de
+// listar_clientes / buscar_cliente):
 //
-//   1. POST /api/v2/contact/all/count  com queryDTO{ birthMonth: N, ... }
-//      → registra o filtro na sessão server-side do user.
-//   2. POST /api/v2/contact/prepare-list-report  { contactIds:[], userId }
-//      → devolve { reportId, requesterUrl }.
-//   3. GET /report/contactdetail?report=<id>&user=<uid>&cursor=&limit=100
-//      → contacts[] com TODOS os campos, paginado por cursor.
+//   1. POST /api/v2/contact/all  com queryDTO{ birthMonth: N, ... } e
+//      paging pageSize alto → a lista do mês inteiro numa chamada (IDs, nome,
+//      telefone). Filtro birthMonth é server-side.
+//   2. GET /api/v2/contact/{id}/details  por contato (concorrência limitada,
+//      na MESMA aba do pool) → enriquece com `birthDate` + `taxDocumentNumber`,
+//      campos que /contact/all NÃO retorna.
 //
-// O `prepare-list-report` NÃO aceita filtros no body — ele lê o queryDTO
-// mais recente da sessão. Por isso a etapa 1 é obrigatória mesmo que já
-// soubéssemos a contagem, e tudo precisa rodar na MESMA page do pool
-// (sessão browser = sessão server-side).
+// HISTÓRICO: a primeira versão (commit 8e7f353, 2026-05-19) usava o trio
+// count → prepare-list-report → GET /report/contactdetail. Esse `/report/...`
+// é um endpoint INTERNO (fora de /api/v2, alimenta a tela "Ficha completa") e
+// passou a falhar de forma consistente em prod com `API_ERROR_-1` (request
+// abortada/sem resposta no transporte — provável CORS/redirect cross-origin
+// nesse host). A memória de discovery já o sinalizava como frágil. Como
+// /contact/all (filtro birthMonth) e /contact/{id}/details respondem normal,
+// migramos para eles: mais round-trips (N+1), mas estável e mitigado pelo
+// cache de 60s. O custo de N×/details roda numa só aba — NÃO abre abas
+// paralelas, então não dispara a detecção de uso indevido da Astrea.
 // ─────────────────────────────────────────────────────────────────────────────
-
-interface AstreaReportContact {
-  id: number;
-  name: string;
-  nickname?: string;
-  /** Data de nascimento no formato `dd/MM/yyyy` (formato BR do report). */
-  birth?: string;
-  taxDocumentNumber?: string;
-  idDocumentNumber?: string;
-  clientOrigin?: string;
-  classificationName?: string;
-  person?: boolean;
-  simpleNational?: boolean;
-  death?: string;
-  sites?: Array<{ url?: string } | string>;
-  telephones?: AstreaPhone[];
-  emails?: AstreaEmail[];
-  addresses?: AstreaAddress[];
-  /** No report vem como `dd/MM/yyyy`. */
-  createdAt?: string;
-}
-
-interface AstreaReportContactDetailResponse {
-  contacts?: AstreaReportContact[];
-  cursor?: string;
-}
-
-interface AstreaPrepareListReportResponse {
-  reportId?: number;
-  requesterUrl?: string;
-}
 
 export interface FiltrosAniversariantes {
   /** Mês de aniversário (1-12). */
@@ -1521,58 +1486,47 @@ export interface FiltrosAniversariantes {
   etiquetasIds?: number[];
 }
 
-/** Converte `"14/06/1966"` em `"1966-06-14"` (ISO). Retorna undefined se inválido. */
-function parseBirthBrToIso(br: string | undefined): string | undefined {
-  if (!br) return undefined;
-  const m = br.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-  if (!m) return undefined;
-  return `${m[3]}-${m[2]}-${m[1]}`;
-}
-
-function extractReportSiteUrl(sites: AstreaReportContact['sites']): string | undefined {
-  if (!Array.isArray(sites)) return undefined;
-  for (const s of sites) {
-    const url = typeof s === 'string' ? s : s?.url;
-    if (url && url.trim() !== '') return url.trim();
-  }
+/**
+ * Normaliza a data de nascimento para ISO (`yyyy-MM-dd`).
+ *
+ * `/contact/{id}/details` devolve `birthDate` em formato BR (`dd/MM/yyyy`, ex.
+ * "04/07/1974"). Para preservar o contrato histórico de `listar_aniversariantes`
+ * (que emitia ISO via /report/contactdetail), convertemos aqui. Se já vier em
+ * ISO, passa adiante; se não casar nenhum formato conhecido, retorna undefined.
+ */
+function normalizeBirthToIso(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const br = value.trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (br) return `${br[3]}-${br[2]}-${br[1]}`;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value.trim())) return value.trim();
   return undefined;
 }
 
-function mapReportContactToCliente(c: AstreaReportContact): Cliente {
-  const id = String(c.id);
+/**
+ * Aplica `fn` aos itens com concorrência limitada (`limit` execuções em voo).
+ * Preserva a ordem dos resultados. Usado para enriquecer os aniversariantes
+ * via /details sem disparar N requests de uma vez na aba.
+ */
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let cursor = 0;
 
-  const telefone =
-    c.telephones?.find((t) => t.typeEnum?.includes('CELLULAR') || t.typeEnum === 'WHATSAPP')
-      ?.telephone ??
-    c.telephones?.[0]?.telephone ??
-    undefined;
+  async function worker(): Promise<void> {
+    while (cursor < items.length) {
+      const i = cursor++;
+      results[i] = await fn(items[i], i);
+    }
+  }
 
-  const email = c.emails?.[0]?.address ?? (c.emails?.[0] as { email?: string })?.email ?? undefined;
-
-  const urlDrive = extractReportSiteUrl(c.sites);
-
-  const enderecoRaw = c.addresses?.[0] as { display?: string; value?: string } | undefined;
-  const endereco = enderecoRaw?.display ?? enderecoRaw?.value ?? undefined;
-
-  return {
-    id,
-    nome: c.name?.trim() ?? '',
-    url: urlContato(id),
-    cpfCnpj: c.taxDocumentNumber?.trim() || undefined,
-    email,
-    telefone,
-    urlDrive,
-    endereco,
-    dataNascimento: parseBirthBrToIso(c.birth),
-    origem: c.clientOrigin?.trim() || undefined,
-    tipo:
-      c.person === true
-        ? 'pessoa_fisica'
-        : c.person === false
-          ? 'pessoa_juridica'
-          : undefined,
-    createdAt: c.createdAt || undefined,
-  };
+  const workers = Array.from({ length: Math.min(Math.max(limit, 1), items.length) }, () =>
+    worker(),
+  );
+  await Promise.all(workers);
+  return results;
 }
 
 // ── Cache (mesma doutrina do listarClientes: TTL 60s + inflight dedup) ─────
@@ -1594,69 +1548,62 @@ function buildAniversariantesCacheKey(filtros: FiltrosAniversariantes): string {
   });
 }
 
-const REPORT_PAGE_SIZE = 100;
-const REPORT_MAX_PAGES = 50;
+/** Contatos enriquecidos via /details a cada lote — gentil com o Astrea. */
+const ANIVERSARIANTES_ENRICH_CONCURRENCY = 6;
 
-async function fetchRelatorioAniversariantes(
+async function fetchAniversariantes(
   page: Page,
   filtros: FiltrosAniversariantes,
 ): Promise<Cliente[]> {
-  const userId = await getAstreaUserId(page);
-
-  const queryDTO = buildQueryDTO({
-    mesAniversario: filtros.mes,
-    estado: filtros.estado,
-    etiquetasIds: filtros.etiquetasIds,
+  // 1. Lista do mês via /contact/all (endpoint estável, filtro birthMonth
+  //    server-side). pageSize alto traz o mês inteiro numa chamada — o volume
+  //    de aniversariantes do escritório cabe folgado em 9999.
+  const response = await astreaApiPost<AstreaContactListResponse>(page, `/contact/all`, {
+    queryDTO: {
+      ...buildQueryDTO({
+        mesAniversario: filtros.mes,
+        estado: filtros.estado,
+        etiquetasIds: filtros.etiquetasIds,
+      }),
+      onlyCount: false,
+    },
+    paging: { pageNumber: 0, pageSize: 9999 },
   });
 
-  // 1. Registra o filtro na sessão server-side.
-  await astreaApiPost<{ count?: number }>(page, `/contact/all/count`, {
-    queryCursor: null,
-    limit: 30,
-    queryDTO,
-    userId,
-  });
+  const contacts = response.contacts ?? [];
+  if (contacts.length === 0) return [];
 
-  // 2. Cria o reportId vinculado ao queryDTO recém-registrado.
-  const prepare = await astreaApiPost<AstreaPrepareListReportResponse>(
-    page,
-    `/contact/prepare-list-report`,
-    { contactIds: [], userId },
+  // 2. Enriquece cada contato com /contact/{id}/details — traz birthDate +
+  //    taxDocumentNumber, que /contact/all NÃO inclui. Concorrência limitada
+  //    na MESMA aba (sem abrir abas paralelas → não trip a detecção da Astrea).
+  const clientes = await mapWithConcurrency(
+    contacts,
+    ANIVERSARIANTES_ENRICH_CONCURRENCY,
+    async (item): Promise<Cliente> => {
+      try {
+        const details = await astreaApiGet<AstreaContactDetails>(
+          page,
+          `/contact/${item.id}/details`,
+        );
+        const cliente = mapContactDetails(details);
+        cliente.dataNascimento = normalizeBirthToIso(details.birthDate);
+        return cliente;
+      } catch (enrichErr) {
+        logger.warn(
+          { id: item.id, err: String(enrichErr) },
+          'Falha ao enriquecer aniversariante via /details; usando dados parciais da lista',
+        );
+        return mapContactListItem(item);
+      }
+    },
   );
-
-  const reportId = prepare.reportId;
-  if (reportId == null) {
-    throw new Error('API_ERROR: prepare-list-report não devolveu reportId');
-  }
-
-  // 3. Paginação por cursor sobre o relatório.
-  const contatos: AstreaReportContact[] = [];
-  let cursor = '';
-  let pages = 0;
-
-  while (pages < REPORT_MAX_PAGES) {
-    const path =
-      `/report/contactdetail` +
-      `?cursor=${encodeURIComponent(cursor)}` +
-      `&limit=${REPORT_PAGE_SIZE}` +
-      `&report=${reportId}` +
-      `&user=${encodeURIComponent(userId)}`;
-
-    const resp = await astreaAppGet<AstreaReportContactDetailResponse>(page, path);
-    const list = resp.contacts ?? [];
-    contatos.push(...list);
-
-    if (!resp.cursor || list.length === 0) break;
-    cursor = resp.cursor;
-    pages++;
-  }
 
   logger.debug(
-    { mes: filtros.mes, total: contatos.length, pages },
-    'Aniversariantes obtidos via relatório.',
+    { mes: filtros.mes, total: clientes.length },
+    'Aniversariantes obtidos via /contact/all + /details.',
   );
 
-  return contatos.map(mapReportContactToCliente);
+  return clientes;
 }
 
 export async function listarAniversariantesEnriquecidos(
@@ -1668,7 +1615,7 @@ export async function listarAniversariantesEnriquecidos(
       () =>
         withBrowserContext(async (page) => {
           await navigateTo(page, ANGULAR_PAGE_PATH);
-          return fetchRelatorioAniversariantes(page, filtros);
+          return fetchAniversariantes(page, filtros);
         }),
     );
 
@@ -1683,10 +1630,7 @@ export async function listarAniversariantesEnriquecidos(
       ok: false,
       error: {
         message: err instanceof Error ? err.message : 'Erro desconhecido',
-        code:
-          err instanceof Error && err.message.includes('BROWSER_POOL_TIMEOUT')
-            ? 'BROWSER_UNAVAILABLE'
-            : 'SCRAPE_ERROR',
+        code: isBrowserUnavailableError(err) ? 'BROWSER_UNAVAILABLE' : 'SCRAPE_ERROR',
         retryable: isRetryablePlaywrightError(err),
       },
     };

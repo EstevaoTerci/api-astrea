@@ -588,178 +588,208 @@ describe('getListarClientesCacheStats', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // listarAniversariantesEnriquecidos
 //
-// Fluxo trio: POST /contact/all/count → POST /contact/prepare-list-report
-// → GET /report/contactdetail (paginado por cursor).
-// O service mapeia AstreaReportContact → Cliente com `birth` ("dd/MM/yyyy")
-// convertido para ISO, `taxDocumentNumber` → `cpfCnpj`, telefone, email, etc.
+// Fluxo REST estável (substitui o antigo trio count → prepare-list-report →
+// /report/contactdetail, que quebrou em prod com API_ERROR_-1 no endpoint
+// interno /report/contactdetail):
+//
+//   1. POST /contact/all  com queryDTO{ birthMonth: N }  → lista do mês (IDs,
+//      nome, telefone) — endpoint estável, mesmo de listar_clientes.
+//   2. GET /contact/{id}/details (por contato, concorrência limitada) →
+//      enriquece com `birthDate` (BR dd/MM/yyyy) + `taxDocumentNumber`, que a
+//      lista NÃO traz. Mesma aba, sem abrir abas paralelas.
+//
+// O service mapeia via mapContactDetails e normaliza `dataNascimento` para ISO
+// (preserva o contrato histórico de listar_aniversariantes).
 // ─────────────────────────────────────────────────────────────────────────────
 
-function makeReportContact(overrides: Partial<{
-  id: number;
-  name: string;
-  nickname: string;
-  birth: string;
-  taxDocumentNumber: string;
-  clientOrigin: string;
-  person: boolean;
-  telephones: any[];
-  emails: any[];
-  addresses: any[];
-  sites: any[];
-  createdAt: string;
-}> = {}) {
-  return {
-    id: 5312778616111104,
-    name: 'Airton Florentino',
-    nickname: 'Airton Florentino',
-    birth: '14/06/1966',
-    taxDocumentNumber: '003.262.217-19',
-    clientOrigin: 'Espontâneo',
-    person: true,
-    classificationName: 'Cliente',
-    telephones: [{ typeEnum: 'PERSONAL_CELLULAR', telephone: '(27) 99924-0611' }],
-    emails: [{ address: 'airton@example.com' }],
-    addresses: [{ display: 'Corrego da Prata, sn — Itaperuna' }],
-    sites: [],
-    createdAt: '12/06/2025',
-    ...overrides,
-  };
-}
-
 describe('listarAniversariantesEnriquecidos', () => {
-  it('dispara o trio count → prepare → contactdetail e mapeia para Cliente enriquecido', async () => {
-    // 1. count (registra filtro server-side)
-    mockPost.mockResolvedValueOnce({ count: 1 });
-    // 2. prepare-list-report → reportId
-    mockPost.mockResolvedValueOnce({ reportId: 6736588643532800, requesterUrl: '' });
-    // 3. /report/contactdetail → 1 contato, sem cursor (fim)
-    mockAppGet.mockResolvedValueOnce({
-      contacts: [makeReportContact()],
+  it('lista via /contact/all (birthMonth) e enriquece cada contato via /details', async () => {
+    mockPost.mockResolvedValueOnce({
+      contacts: [
+        makeContactListItem({ id: 1, name: 'Airton' }),
+        makeContactListItem({ id: 2, name: 'Maria' }),
+      ],
       cursor: '',
     });
+    mockGet
+      .mockResolvedValueOnce(
+        makeContactDetails({ id: 1, name: 'Airton', birthDate: '14/06/1966' }),
+      )
+      .mockResolvedValueOnce(
+        makeContactDetails({ id: 2, name: 'Maria', birthDate: '20/06/1980' }),
+      );
 
     const r = await listarAniversariantesEnriquecidos({ mes: 6 });
 
     expect(r.ok).toBe(true);
     if (!r.ok) return;
 
-    // Trio chamado na ordem correta
-    expect(mockPost).toHaveBeenNthCalledWith(
-      1,
+    // Passo 1: lista do mês via /contact/all com filtro server-side birthMonth.
+    expect(mockPost).toHaveBeenCalledWith(
       expect.anything(),
-      '/contact/all/count',
+      '/contact/all',
       expect.objectContaining({
         queryDTO: expect.objectContaining({ birthMonth: 6 }),
-        userId: '1234567890',
       }),
     );
-    expect(mockPost).toHaveBeenNthCalledWith(
-      2,
+    // Passo 2: enriquecimento por /details de cada contato.
+    expect(mockGet).toHaveBeenCalledWith(expect.anything(), '/contact/1/details');
+    expect(mockGet).toHaveBeenCalledWith(expect.anything(), '/contact/2/details');
+
+    // NÃO toca mais o trio frágil do report.
+    expect(mockAppGet).not.toHaveBeenCalled();
+    expect(mockPost).not.toHaveBeenCalledWith(
+      expect.anything(),
+      '/contact/all/count',
+      expect.anything(),
+    );
+    expect(mockPost).not.toHaveBeenCalledWith(
       expect.anything(),
       '/contact/prepare-list-report',
-      expect.objectContaining({ contactIds: [], userId: '1234567890' }),
-    );
-    expect(mockAppGet).toHaveBeenCalledWith(
       expect.anything(),
-      expect.stringMatching(
-        /^\/report\/contactdetail\?cursor=&limit=100&report=6736588643532800&user=1234567890$/,
-      ),
     );
 
-    // Mapping enriquecido
-    expect(r.data).toHaveLength(1);
+    expect(r.data).toHaveLength(2);
     expect(r.data[0]).toMatchObject({
-      id: '5312778616111104',
-      nome: 'Airton Florentino',
-      cpfCnpj: '003.262.217-19',
-      dataNascimento: '1966-06-14', // converteu dd/MM/yyyy → ISO
-      telefone: '(27) 99924-0611',
-      email: 'airton@example.com',
+      id: '1',
+      nome: 'Airton',
+      cpfCnpj: '123.456.789-09',
+      dataNascimento: '1966-06-14', // birthDate BR (dd/MM/yyyy) → ISO
       tipo: 'pessoa_fisica',
-      origem: 'Espontâneo',
     });
   });
 
-  it('pagina por cursor até receber cursor vazio', async () => {
-    mockPost.mockResolvedValueOnce({ count: 2 });
-    mockPost.mockResolvedValueOnce({ reportId: 999, requesterUrl: '' });
-    // Página 1: cursor não-vazio (tem próxima)
-    mockAppGet.mockResolvedValueOnce({
-      contacts: [makeReportContact({ id: 1, name: 'A' })],
-      cursor: 'Cm4KLk...',
-    });
-    // Página 2: cursor vazio (fim)
-    mockAppGet.mockResolvedValueOnce({
-      contacts: [makeReportContact({ id: 2, name: 'B' })],
+  it('converte dataNascimento BR (dd/MM/yyyy) do /details para ISO', async () => {
+    mockPost.mockResolvedValueOnce({
+      contacts: [makeContactListItem({ id: 7 })],
       cursor: '',
     });
+    mockGet.mockResolvedValueOnce(makeContactDetails({ id: 7, birthDate: '04/07/1974' }));
 
     const r = await listarAniversariantesEnriquecidos({ mes: 7 });
 
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(r.data).toHaveLength(2);
-    expect(mockAppGet).toHaveBeenCalledTimes(2);
+    expect(r.data[0].dataNascimento).toBe('1974-07-04');
   });
 
-  it('cacheia chamadas idênticas (segunda execução não dispara o trio)', async () => {
-    mockPost.mockResolvedValueOnce({ count: 0 });
-    mockPost.mockResolvedValueOnce({ reportId: 12345, requesterUrl: '' });
-    mockAppGet.mockResolvedValueOnce({ contacts: [], cursor: '' });
+  it('mantém dataNascimento já em ISO inalterado', async () => {
+    mockPost.mockResolvedValueOnce({
+      contacts: [makeContactListItem({ id: 8 })],
+      cursor: '',
+    });
+    mockGet.mockResolvedValueOnce(makeContactDetails({ id: 8, birthDate: '1990-03-15' }));
 
-    const r1 = await listarAniversariantesEnriquecidos({ mes: 8 });
-    const r2 = await listarAniversariantesEnriquecidos({ mes: 8 });
+    const r = await listarAniversariantesEnriquecidos({ mes: 8 });
+
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data[0].dataNascimento).toBe('1990-03-15');
+  });
+
+  it('enriquece TODOS os contatos do mês (não limita a 20 como listarClientes)', async () => {
+    const items = Array.from({ length: 25 }, (_, i) =>
+      makeContactListItem({ id: i + 1, name: `Aniversariante ${i + 1}` }),
+    );
+    mockPost.mockResolvedValueOnce({ contacts: items, cursor: '' });
+    mockGet.mockResolvedValue(makeContactDetails({ id: 99 }));
+
+    const r = await listarAniversariantesEnriquecidos({ mes: 1 });
+
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data).toHaveLength(25);
+    expect(mockGet).toHaveBeenCalledTimes(25);
+  });
+
+  it('cacheia chamadas idênticas (segunda execução não refaz a lista nem o enrich)', async () => {
+    mockPost.mockResolvedValueOnce({
+      contacts: [makeContactListItem({ id: 1 })],
+      cursor: '',
+    });
+    mockGet.mockResolvedValueOnce(makeContactDetails({ id: 1 }));
+
+    const r1 = await listarAniversariantesEnriquecidos({ mes: 2 });
+    const r2 = await listarAniversariantesEnriquecidos({ mes: 2 });
 
     expect(r1.ok).toBe(true);
     expect(r2.ok).toBe(true);
-    // Trio executou só 1 vez (count + prepare)
-    expect(mockPost).toHaveBeenCalledTimes(2);
-    expect(mockAppGet).toHaveBeenCalledTimes(1);
+    // Lista e enrich rodaram só 1 vez (segunda veio do cache).
+    expect(mockPost).toHaveBeenCalledTimes(1);
+    expect(mockGet).toHaveBeenCalledTimes(1);
   });
 
-  it('retorna erro quando prepare-list-report não devolve reportId', async () => {
-    mockPost.mockResolvedValueOnce({ count: 1 });
-    mockPost.mockResolvedValueOnce({}); // sem reportId
+  it('usa dados parciais da lista quando o /details de um contato falha', async () => {
+    mockPost.mockResolvedValueOnce({
+      contacts: [
+        makeContactListItem({ id: 1, name: 'OK' }),
+        makeContactListItem({ id: 2, name: 'Falha' }),
+      ],
+      cursor: '',
+    });
+    mockGet
+      .mockResolvedValueOnce(makeContactDetails({ id: 1, name: 'OK', birthDate: '01/01/1970' }))
+      .mockRejectedValueOnce(new Error('API_ERROR_500: indisponível'));
 
-    const r = await listarAniversariantesEnriquecidos({ mes: 9 });
+    const r = await listarAniversariantesEnriquecidos({ mes: 3 });
+
+    // A operação inteira não falha por causa de 1 contato.
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data).toHaveLength(2);
+    // Contato enriquecido tem data; o que falhou aparece parcial (sem dataNascimento).
+    expect(r.data.find((c) => c.id === '1')?.dataNascimento).toBe('1970-01-01');
+    expect(r.data.find((c) => c.id === '2')?.dataNascimento).toBeUndefined();
+  });
+
+  it('mapeia contactKind=COMPANY para tipo=pessoa_juridica', async () => {
+    mockPost.mockResolvedValueOnce({
+      contacts: [makeContactListItem({ id: 42, name: 'Empresa LTDA' })],
+      cursor: '',
+    });
+    mockGet.mockResolvedValueOnce(
+      makeContactDetails({ id: 42, name: 'Empresa LTDA', contactKind: 'COMPANY' }),
+    );
+
+    const r = await listarAniversariantesEnriquecidos({ mes: 4 });
+
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data[0]).toMatchObject({ id: '42', nome: 'Empresa LTDA', tipo: 'pessoa_juridica' });
+  });
+
+  it('retorna lista vazia quando não há aniversariantes no mês (sem chamar /details)', async () => {
+    mockPost.mockResolvedValueOnce({ contacts: [], cursor: '' });
+
+    const r = await listarAniversariantesEnriquecidos({ mes: 5 });
+
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data).toHaveLength(0);
+    expect(mockGet).not.toHaveBeenCalled();
+  });
+
+  it('propaga erro como ServiceResponse { ok: false } quando a lista falha', async () => {
+    mockPost.mockRejectedValueOnce(new Error('BROWSER_POOL_TIMEOUT: sem slot'));
+
+    const r = await listarAniversariantesEnriquecidos({ mes: 12 });
 
     expect(r.ok).toBe(false);
     if (r.ok) return;
-    expect(r.error.message).toMatch(/reportId/i);
+    expect(r.error.code).toBe('BROWSER_UNAVAILABLE');
   });
 
-  it('mapeia person=false para tipo=pessoa_juridica', async () => {
-    mockPost.mockResolvedValueOnce({ count: 1 });
-    mockPost.mockResolvedValueOnce({ reportId: 1, requesterUrl: '' });
-    mockAppGet.mockResolvedValueOnce({
-      contacts: [makeReportContact({ id: 42, person: false, name: 'Empresa LTDA' })],
-      cursor: '',
-    });
+  it('mapeia circuit breaker de login aberto para BROWSER_UNAVAILABLE', async () => {
+    mockPost.mockRejectedValueOnce(
+      new Error('LOGIN_CIRCUIT_OPEN: login bloqueado após 3 falhas; retry em ~57s'),
+    );
 
-    const r = await listarAniversariantesEnriquecidos({ mes: 10 });
+    // mês novo pra não bater cache de testes anteriores
+    const r = await listarAniversariantesEnriquecidos({ mes: 9, estado: 'BA' });
 
-    expect(r.ok).toBe(true);
-    if (!r.ok) return;
-    expect(r.data[0]).toMatchObject({
-      id: '42',
-      nome: 'Empresa LTDA',
-      tipo: 'pessoa_juridica',
-    });
-  });
-
-  it('retorna dataNascimento undefined quando birth está vazio ou mal formatado', async () => {
-    mockPost.mockResolvedValueOnce({ count: 1 });
-    mockPost.mockResolvedValueOnce({ reportId: 2, requesterUrl: '' });
-    mockAppGet.mockResolvedValueOnce({
-      contacts: [makeReportContact({ id: 43, birth: '' })],
-      cursor: '',
-    });
-
-    const r = await listarAniversariantesEnriquecidos({ mes: 11 });
-
-    expect(r.ok).toBe(true);
-    if (!r.ok) return;
-    expect(r.data[0].dataNascimento).toBeUndefined();
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error.code).toBe('BROWSER_UNAVAILABLE');
   });
 });
 
