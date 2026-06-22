@@ -74,6 +74,26 @@ describe('errorHandler — mapeamento de erros do scraping', () => {
     expect(res.body.code).toBe('BROWSER_UNAVAILABLE');
   });
 
+  it('LOGIN_CIRCUIT_OPEN → 503 BROWSER_UNAVAILABLE + Retry-After', async () => {
+    const res = await request(
+      appThatThrows(new Error('LOGIN_CIRCUIT_OPEN: login bloqueado; retry em ~58s')),
+    ).get('/boom');
+
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe('BROWSER_UNAVAILABLE');
+    expect(res.headers['retry-after']).toBe('60');
+  });
+
+  it('LOGIN_FAILED_* → 503 BROWSER_UNAVAILABLE + Retry-After curto', async () => {
+    const res = await request(
+      appThatThrows(new Error('LOGIN_FAILED_STILL_ON_LOGIN: campo de senha visível | url=... hash=...')),
+    ).get('/boom');
+
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe('BROWSER_UNAVAILABLE');
+    expect(res.headers['retry-after']).toBe('15');
+  });
+
   it('NOT_FOUND → 404', async () => {
     const res = await request(appThatThrows(new Error('NOT_FOUND: contato não existe'))).get(
       '/boom',

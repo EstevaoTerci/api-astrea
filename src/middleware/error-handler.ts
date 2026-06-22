@@ -13,6 +13,12 @@ function mapErrorToHttp(error: Error): { status: number; code: string; retryAfte
   if (msg.includes('QUEUE_TIMEOUT')) return { status: 503, code: 'QUEUE_TIMEOUT', retryAfter: 5 };
   if (msg.includes('AUTH_FAILED')) return { status: 502, code: 'AUTH_FAILED' };
   if (msg.includes('BROWSER_POOL_TIMEOUT')) return { status: 503, code: 'BROWSER_UNAVAILABLE' };
+  // Circuit breaker de login aberto → back-pressure (igual à doutrina de fila/rate-limit).
+  if (msg.includes('LOGIN_CIRCUIT_OPEN'))
+    return { status: 503, code: 'BROWSER_UNAVAILABLE', retryAfter: 60 };
+  // Falha de login estruturada (timeout/interstitial/desconhecido) → indisponível, com retry curto.
+  if (msg.includes('LOGIN_FAILED_'))
+    return { status: 503, code: 'BROWSER_UNAVAILABLE', retryAfter: 15 };
   if (msg.includes('NOT_FOUND')) return { status: 404, code: 'NOT_FOUND' };
   if (msg.includes('timeout') || msg.includes('Timeout')) return { status: 504, code: 'TIMEOUT' };
   if (msg.includes('Navigation failed')) return { status: 502, code: 'NAVIGATION_FAILED' };
