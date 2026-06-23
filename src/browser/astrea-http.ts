@@ -1,6 +1,7 @@
 import { Page } from 'playwright';
 import { browserPool } from './pool.js';
 import { withRetry, isRetryablePlaywrightError } from '../utils/retry.js';
+import { isLoginError } from './login-state.js';
 import { logger } from '../utils/logger.js';
 
 /** Base URL da API REST interna do Astrea */
@@ -93,6 +94,11 @@ export async function withBrowserContext<T>(operation: (page: Page) => Promise<T
         maxAttempts: 3,
         retryIf: (err) => {
           if (err instanceof Error && err.message.includes('AUTH_FAILED')) return false;
+          // Falha de LOGIN (estruturada) ou circuit breaker aberto NÃO são
+          // re-tentadas: re-logar um login que estourou só gera tempestade de
+          // logins (clearCookies + novo UI-login), o padrão que a Astrea trata
+          // como uso indevido. Erros de OPERAÇÃO transitórios seguem retryable.
+          if (isLoginError(err)) return false;
           if (isSessionRecoveryError(err)) return true;
           return isRetryablePlaywrightError(err as Error);
         },

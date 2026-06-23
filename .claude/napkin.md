@@ -29,6 +29,8 @@
    Do instead: use `Manual Trigger` only for ad hoc UI runs; switch smoke tests to `Webhook` when they need remote execution from MCP or external tooling.
 4. **[2026-03-17] Atendimentos do Astrea usam `consulting/query`, não `/consulting/all`**
    Do instead: listar com `POST /consulting/query` + `POST /consulting/query/count`, e criar com `POST /consulting` incluindo `messages[]` além de `message`.
+5. **[2026-06-22] Login robusto — estruturado, com breaker e sessão persistida**
+   Do instead: erros de login chegam como `LOGIN_FAILED_<STATE>` (login-state.ts) ou `LOGIN_CIRCUIT_OPEN` (breaker, 3 falhas → cooldown 60s), não-retentados pelo `retryIf` (corta amplificação K×3) e mapeados a 503+Retry-After. A sessão é persistida em `storageState` (`session-state.ts`, honra `SESSION_REUSE`): cold-start restaura em vez de re-logar; `clearCookies` só em `forceClear` (pós-invalidação). Heurística pós-login/breaker/sessão são puras/testáveis — Playwright fica só no glue de `pool.ts`. Observabilidade em `GET /health` bloco `login`.
 
 ## User Directives
 1. **[2026-03-12] Keep collaboration concise and action-oriented**

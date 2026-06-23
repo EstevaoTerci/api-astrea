@@ -18,6 +18,7 @@ router.get('/', (_req: Request, res: Response) => {
     uptime: Math.floor(process.uptime()),
     pool: poolStats,
     queue: queueStats,
+    login: browserPool.loginStats,
     cache: {
       listarClientes: getListarClientesCacheStats(),
       aniversariantes: getAniversariantesCacheStats(),

@@ -24,6 +24,12 @@ vi.mock('../browser/pool.js', () => ({
         totalTimedOut: 0,
       },
     },
+    loginStats: {
+      breaker: { state: 'CLOSED', consecutiveFailures: 0, openUntil: null },
+      session: { reuseEnabled: true, restoredFromStorage: true, ageMs: 12_345 },
+      counters: { coldStarts: 2, logins: 1, loginFailures: 0 },
+      lastFailure: null,
+    },
   },
 }));
 
@@ -138,6 +144,17 @@ describe('GET /health', () => {
       hitRatio: 0.923,
     });
     expect(getAniversariantesCacheStats).toHaveBeenCalled();
+  });
+
+  it('expõe stats de login (breaker, sessão, contadores)', async () => {
+    const res = await request(buildHealthApp()).get('/health');
+
+    expect(res.body.login).toEqual({
+      breaker: { state: 'CLOSED', consecutiveFailures: 0, openUntil: null },
+      session: { reuseEnabled: true, restoredFromStorage: true, ageMs: 12_345 },
+      counters: { coldStarts: 2, logins: 1, loginFailures: 0 },
+      lastFailure: null,
+    });
   });
 
   it('expõe stats do rate limiter (incluindo blockedTotal)', async () => {

@@ -20,6 +20,15 @@ const envSchema = z.object({
   // (múltiplas abas paralelas na mesma sessão logada). Pool > 5 não é seguro.
   BROWSER_POOL_SIZE: z.coerce.number().int().min(1).max(5).default(3),
   BROWSER_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
+  // Timeout DEDICADO da espera pós-login (clicar "Entrar" → SPA chegar em #/main/).
+  // Separado de BROWSER_TIMEOUT_MS: o cold-start do Chromium + boot da SPA tem
+  // cauda observada de ~27s (mediana ~12s) perto do teto antigo de 30s; 45s cobre
+  // a cauda sem afrouxar o timeout das operações nem custar logins extras.
+  BROWSER_LOGIN_TIMEOUT_MS: z.coerce.number().int().positive().default(45000),
+  // Circuit breaker de login: corta a tempestade de re-logins (uso indevido na
+  // Astrea). Abre após N falhas consecutivas e segura novos logins por cooldown.
+  LOGIN_BREAKER_THRESHOLD: z.coerce.number().int().min(1).default(3),
+  LOGIN_BREAKER_COOLDOWN_MS: z.coerce.number().int().min(0).default(60000),
   BROWSER_IDLE_TTL_MS: z.coerce.number().int().min(0).default(900000),
   BROWSER_EXECUTABLE_PATH: z.string().optional(),
   BROWSER_HEADLESS: z
@@ -28,10 +37,16 @@ const envSchema = z.object({
     .default('true'),
 
   // Configurações de sessão
+  // SESSION_REUSE (agora EFETIVAMENTE lido): liga a persistência do storageState
+  // em disco, permitindo restaurar a sessão no cold-start em vez de re-logar.
   SESSION_REUSE: z
     .string()
     .transform((v) => v !== 'false')
     .default('true'),
+  /** Caminho do arquivo de storageState; default = tmpdir/astrea-session.json. */
+  SESSION_STATE_PATH: z.string().optional(),
+  /** Idade máxima da sessão persistida antes de exigir re-login (default 6h). */
+  SESSION_STATE_MAX_AGE_MS: z.coerce.number().int().min(0).default(21_600_000),
 
   // Rate limiting (por IP, retorna 429 + Retry-After quando excedido)
   RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),

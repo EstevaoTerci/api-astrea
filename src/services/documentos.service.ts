@@ -5,6 +5,7 @@ import {
   ANGULAR_PAGE_PATH,
 } from '../browser/astrea-http.js';
 import { navigateTo } from '../browser/navigator.js';
+import { isBrowserUnavailableError } from '../browser/login-state.js';
 import { isRetryablePlaywrightError } from '../utils/retry.js';
 import { logger } from '../utils/logger.js';
 import type { DocumentoContato } from '../models/index.js';
@@ -118,10 +119,7 @@ export async function adicionarDocumentoLink(
       error: {
         message:
           err instanceof Error ? err.message.replace(/^API_ERROR:\s*/, '') : 'Erro desconhecido',
-        code:
-          err instanceof Error && err.message.includes('BROWSER_POOL_TIMEOUT')
-            ? 'BROWSER_UNAVAILABLE'
-            : 'API_ERROR',
+        code: isBrowserUnavailableError(err) ? 'BROWSER_UNAVAILABLE' : 'API_ERROR',
         retryable: isRetryablePlaywrightError(err),
       },
     };
