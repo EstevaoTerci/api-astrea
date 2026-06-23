@@ -10,6 +10,7 @@ API REST que expõe dados do sistema jurídico [Astrea](https://astrea.net.br) v
 | `POST`  | `/api/clientes`                                 | Cria cliente/contato                                   |
 | `GET`   | `/api/clientes`                                 | Buscar clientes (ver filtros abaixo)                   |
 | `GET`   | `/api/clientes/todos`                           | Lista completa de todos os clientes (ver filtros)      |
+| `GET`   | `/api/clientes/aniversariantes`                 | Aniversariantes do mês JÁ enriquecidos (`?mes=N`)      |
 | `GET`   | `/api/clientes/:id`                             | Detalhes do cliente (inclui documentos)                |
 | `PATCH` | `/api/clientes/:id`                             | Atualiza parcialmente o cadastro (campos não passados ficam intactos) |
 | `GET`   | `/api/clientes/:id/casos`                       | Casos/processos do cliente                             |
@@ -37,6 +38,12 @@ Mapeiam direto para o `queryDTO` do `POST /contact/all` interno do Astrea — ap
 | `buscarEmEmpresa`| `boolean`      | `queryDTO.searchInCompany`                 | apenas `GET /api/clientes`   |
 
 **Caso de uso típico:** "aniversariantes do mês" passa de `1 + N` chamadas (1 para listar IDs + N para buscar detalhe de cada) para `1 + ~N/12` (a chamada inicial já filtra por mês — só os ~190 do mês precisam de detalhe, em vez de 2.300+ do total).
+
+### `GET /api/clientes/aniversariantes?mes=N` (tool MCP `listar_aniversariantes`)
+
+Devolve os aniversariantes do mês **já enriquecidos** (`dataNascimento` em ISO, `cpfCnpj`, telefone, email, endereço, `tipo`) numa única chamada de API. Internamente combina `POST /contact/all` (filtro `birthMonth`) + `GET /contact/{id}/details` por contato, com concorrência limitada numa só aba e cache de 60s. Aceita também `estado` (UF) e `etiquetasIds`.
+
+> Migrado em 2026-06-22 do endpoint interno `/report/contactdetail`, que quebrou em produção (`API_ERROR_-1`). Ver [docs/2026-06-22-fix-aniversariantes-e-login-resiliente.md](docs/2026-06-22-fix-aniversariantes-e-login-resiliente.md).
 
 ### `GET /api/agenda` — agenda unificada por advogado
 
@@ -112,6 +119,8 @@ Use o `docker-compose.yml` do repositório como arquivo principal da resource `D
 - `BROWSER_POOL_SIZE=3`
 - `BROWSER_IDLE_TTL_MS=900000`
 - `RATE_LIMIT_MAX_REQUESTS=60`
+- `SESSION_REUSE=true` (restaura a sessão no cold-start em vez de re-logar)
+- `BROWSER_LOGIN_TIMEOUT_MS=45000`, `LOGIN_BREAKER_THRESHOLD=3`, `LOGIN_BREAKER_COOLDOWN_MS=60000` (resiliência de login — ver abaixo)
 
 ### Rede com n8n
 
@@ -129,6 +138,7 @@ Se o `n8n` estiver em outra stack, as opções práticas são:
 - O projeto usa um único browser/contexto com sessão compartilhada e fecha cada aba ao final da requisição.
 - O browser usa lazy init e é encerrado automaticamente após o TTL de ociosidade configurado.
 - O runtime de produção usa a imagem oficial do Playwright para manter o browser alinhado com a versão instalada no projeto.
+- **Login resiliente**: a sessão é persistida em `storageState` (`SESSION_REUSE`), então o cold-start após o idle-shutdown restaura a sessão em vez de re-logar. Um circuit breaker segura novos logins após falhas consecutivas (evita tempestade de logins / detecção de uso indevido na Astrea), e falhas de login chegam como `LOGIN_FAILED_<STATE>` / `LOGIN_CIRCUIT_OPEN` (503 + `Retry-After`). O `GET /health` expõe o bloco `login` (estado do breaker, sessão e contadores) para monitorar. Detalhes em [docs/2026-06-22-fix-aniversariantes-e-login-resiliente.md](docs/2026-06-22-fix-aniversariantes-e-login-resiliente.md).
 
 ## Desenvolvimento local
 
