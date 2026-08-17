@@ -6,8 +6,12 @@ const envSchema = z.object({
   ASTREA_EMAIL: z.string().email('ASTREA_EMAIL deve ser um e-mail válido'),
   ASTREA_PASSWORD: z.string().min(1, 'ASTREA_PASSWORD é obrigatório'),
 
-  // Autenticação da API
-  API_KEY: z.string().min(32, 'API_KEY deve ter pelo menos 32 caracteres'),
+  // Autenticação da API. Aceita uma OU outra (lista é a forma recomendada,
+  // permite uma chave por pessoa com rótulo para auditoria/rotação):
+  //   API_KEY=chave_unica_de_no_minimo_32_caracteres        (legada, label `legacy`)
+  //   API_KEYS=chave1:label1,chave2:label2,chave3            (≥32 chars por chave)
+  API_KEY: z.string().min(32, 'API_KEY deve ter pelo menos 32 caracteres').optional(),
+  API_KEYS: z.string().optional(),
 
   // Configurações do servidor
   PORT: z.coerce.number().int().positive().default(3000),
@@ -86,6 +90,12 @@ function parseEnv() {
       .map((e) => `  - ${e.path.join('.')}: ${e.message}`)
       .join('\n');
     throw new Error(`Configuração de ambiente inválida:\n${errors}`);
+  }
+
+  if (!result.data.API_KEY && !result.data.API_KEYS) {
+    throw new Error(
+      'Configuração de ambiente inválida:\n  - API_KEY: defina API_KEY ou API_KEYS (≥32 chars por chave)',
+    );
   }
 
   return result.data;

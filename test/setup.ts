@@ -14,6 +14,10 @@ process.env['ASTREA_EMAIL'] = process.env['ASTREA_EMAIL'] ?? 'test@example.com';
 process.env['ASTREA_PASSWORD'] = process.env['ASTREA_PASSWORD'] ?? 'test-password';
 process.env['API_KEY'] =
   process.env['API_KEY'] ?? 'test-api-key-with-at-least-32-characters-long-aaa';
+// Lista multi-chave (formato `chave[:label],...`) — auth.ts carrega no import.
+process.env['API_KEYS'] =
+  process.env['API_KEYS'] ??
+  'test-list-key-alpha-with-32-plus-chars-aaaa:alpha,test-list-key-beta-with-32-plus-chars-bbbb';
 process.env['NODE_ENV'] = 'test';
 process.env['PORT'] = '3000';
 process.env['BROWSER_POOL_SIZE'] = '1';
