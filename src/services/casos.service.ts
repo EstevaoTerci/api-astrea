@@ -683,7 +683,10 @@ export async function listarProcessos(
     const data = await withBrowserContext(async (page) => {
       // Qualquer página Angular serve — só precisamos do $http com interceptor de sessão.
       await navigateTo(page, ANGULAR_PAGE_PATH);
-      const userId = Number(await getAstreaUserId(page));
+      const userIdStr = await getAstreaUserId(page);
+      // Number('') === 0 é finito: a checagem precisa ser no texto (sessão sem userId).
+      if (!userIdStr) throw new Error('SESSION_EXPIRED: Não foi possível obter userId');
+      const userId = Number(userIdStr);
       if (!Number.isFinite(userId)) {
         throw new Error('SESSION_EXPIRED: userId inválido');
       }

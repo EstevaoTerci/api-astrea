@@ -4,12 +4,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // Foco do teste: a política de retry de `withBrowserContext` (retryIf), em
 // especial que falhas de LOGIN NÃO são re-tentadas (corta a amplificação K×3),
 // enquanto erros de OPERAÇÃO transitórios continuam sendo.
+const poolMock = vi.hoisted(() => ({ geracao: 1 }));
 vi.mock('./pool.js', () => ({
   browserPool: {
     acquirePage: vi.fn().mockResolvedValue({}),
     ensureAuthenticated: vi.fn().mockResolvedValue(undefined),
     releasePage: vi.fn().mockResolvedValue(undefined),
-    invalidateSession: vi.fn(),
+    invalidateSession: vi.fn().mockReturnValue(true),
+    get geracaoSessao() {
+      return poolMock.geracao;
+    },
   },
 }));
 
@@ -18,6 +22,7 @@ import {
   astreaApiGet,
   astreaApiPost,
   astreaApiPut,
+  getAstreaUserId,
   withBrowserContext,
 } from './astrea-http.js';
 import { browserPool } from './pool.js';
@@ -25,11 +30,14 @@ import { browserPool } from './pool.js';
 const mockAcquire = vi.mocked(browserPool.acquirePage);
 const mockEnsure = vi.mocked(browserPool.ensureAuthenticated);
 const mockRelease = vi.mocked(browserPool.releasePage);
+const mockInvalidate = vi.mocked(browserPool.invalidateSession);
 
 beforeEach(() => {
+  poolMock.geracao = 1;
   mockAcquire.mockReset().mockResolvedValue({});
   mockEnsure.mockReset().mockResolvedValue(undefined);
   mockRelease.mockReset().mockResolvedValue(undefined);
+  mockInvalidate.mockReset().mockReturnValue(true);
 });
 
 afterEach(() => {
@@ -126,6 +134,126 @@ describe('withBrowserContext — descarte e recarga da aba', () => {
     await expect(p).resolves.toBe('ok');
     expect(goto).toHaveBeenCalledWith('about:blank');
     expect(goto).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Incidente 25/09/2026: outro login da mesma conta derrubou a sessão no servidor; a SPA
+// limpou o localStorage e getAstreaUserId lançava AUTH_FAILED (não-retryable) — a sessão
+// nunca era invalidada (`authenticated` seguia true) e a api ficou fora até o redeploy.
+describe('sessão derrubada no servidor', () => {
+  const paginaSemUsuario = () => ({ evaluate: vi.fn().mockResolvedValue(null) }) as never;
+
+  it('getAstreaUserId devolve o userId do localStorage quando há sessão', async () => {
+    const page = { evaluate: vi.fn().mockResolvedValue('6528036269752320') } as never;
+    await expect(getAstreaUserId(page)).resolves.toBe('6528036269752320');
+  });
+
+  it('getAstreaUserId sem userId lança SESSION_EXPIRED (recuperável), sempre', async () => {
+    await expect(getAstreaUserId(paginaSemUsuario())).rejects.toThrow(/^SESSION_EXPIRED/);
+    await expect(getAstreaUserId(paginaSemUsuario())).rejects.toThrow(/^SESSION_EXPIRED/);
+  });
+
+  it('invalida a sessão informando a geração usada, recarrega a aba e repete', async () => {
+    vi.useFakeTimers();
+    poolMock.geracao = 7;
+    const goto = vi.fn().mockResolvedValue(undefined);
+    const evaluate = vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce('6528036269752320');
+    mockAcquire.mockResolvedValueOnce({ goto, evaluate } as never);
+    mockEnsure.mockImplementation(async () => {
+      // o relogin (2ª chamada) sobe a geração
+      if (mockEnsure.mock.calls.length === 2) poolMock.geracao = 8;
+    });
+
+    const p = withBrowserContext((page) => getAstreaUserId(page), { warm: true });
+    await vi.runAllTimersAsync();
+
+    await expect(p).resolves.toBe('6528036269752320');
+    expect(mockInvalidate).toHaveBeenCalledTimes(1);
+    expect(mockInvalidate).toHaveBeenCalledWith(7);
+    expect(goto).toHaveBeenCalledWith('about:blank');
+  });
+
+  it('no máximo UMA recuperação por chamada: se o relogin não trouxe o userId, desiste', async () => {
+    vi.useFakeTimers();
+    const goto = vi.fn().mockResolvedValue(undefined);
+    const evaluate = vi.fn().mockResolvedValue(null);
+    mockAcquire.mockResolvedValueOnce({ goto, evaluate } as never);
+
+    const p = withBrowserContext((page) => getAstreaUserId(page), { warm: true });
+    const verificacao = expect(p).rejects.toThrow(/^SESSION_EXPIRED/);
+    await vi.runAllTimersAsync();
+    await verificacao;
+
+    expect(mockInvalidate).toHaveBeenCalledTimes(1);
+    expect(evaluate).toHaveBeenCalledTimes(2);
+  });
+
+  it('401 também conta como a recuperação da chamada (não invalida 2x)', async () => {
+    vi.useFakeTimers();
+    const goto = vi.fn().mockResolvedValue(undefined);
+    mockAcquire.mockResolvedValueOnce({ goto } as never);
+    const op = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('API_ERROR_401: non-existent user session'))
+      .mockRejectedValueOnce(new Error('SESSION_EXPIRED: não foi possível obter userId da sessão'));
+
+    const p = withBrowserContext(op, { warm: true });
+    const verificacao = expect(p).rejects.toThrow(/^SESSION_EXPIRED/);
+    await vi.runAllTimersAsync();
+    await verificacao;
+
+    expect(op).toHaveBeenCalledTimes(2);
+    expect(mockInvalidate).toHaveBeenCalledTimes(1);
+  });
+
+  it('se a sessão foi renovada por outra requisição entre tentativas, recarrega a aba antes de repetir', async () => {
+    vi.useFakeTimers();
+    const goto = vi.fn().mockResolvedValue(undefined);
+    mockAcquire.mockResolvedValueOnce({ goto } as never);
+    mockEnsure.mockImplementation(async () => {
+      if (mockEnsure.mock.calls.length === 2) poolMock.geracao = 2; // outra requisição relogou
+    });
+    const op = vi.fn().mockRejectedValueOnce(new Error('net::ERR_CONNECTION_RESET')).mockResolvedValueOnce('ok');
+
+    const p = withBrowserContext(op, { warm: true });
+    await vi.runAllTimersAsync();
+
+    await expect(p).resolves.toBe('ok');
+    expect(goto).toHaveBeenCalledWith('about:blank');
+    expect(mockInvalidate).not.toHaveBeenCalled();
+  });
+
+  it('sem mudança de sessão, retentativa de erro transitório NÃO recarrega a aba', async () => {
+    vi.useFakeTimers();
+    const goto = vi.fn().mockResolvedValue(undefined);
+    mockAcquire.mockResolvedValueOnce({ goto } as never);
+    const op = vi.fn().mockRejectedValueOnce(new Error('net::ERR_CONNECTION_RESET')).mockResolvedValueOnce('ok');
+
+    const p = withBrowserContext(op, { warm: true });
+    await vi.runAllTimersAsync();
+
+    await expect(p).resolves.toBe('ok');
+    expect(goto).not.toHaveBeenCalled();
+  });
+
+  it('sessão morta detectada na ÚLTIMA tentativa ainda invalida (próxima requisição reloga)', async () => {
+    vi.useFakeTimers();
+    const goto = vi.fn().mockResolvedValue(undefined);
+    mockAcquire.mockResolvedValueOnce({ goto } as never);
+    const op = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('net::ERR_CONNECTION_RESET'))
+      .mockRejectedValueOnce(new Error('Execution context was destroyed'))
+      .mockRejectedValueOnce(new Error('SESSION_EXPIRED: não foi possível obter userId da sessão'));
+
+    const p = withBrowserContext(op, { warm: true });
+    const verificacao = expect(p).rejects.toThrow(/^SESSION_EXPIRED/);
+    await vi.runAllTimersAsync();
+    await verificacao;
+
+    expect(op).toHaveBeenCalledTimes(3);
+    expect(mockInvalidate).toHaveBeenCalledTimes(1);
+    expect(mockInvalidate).toHaveBeenCalledWith(1);
   });
 });
 

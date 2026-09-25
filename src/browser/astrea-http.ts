@@ -93,10 +93,23 @@ export async function withBrowserContext<T>(
   // rota igual do navigateTo.
   let recarregar = false;
   let falhou = false;
+  // Geração da sessão com que a tentativa atual rodou (o pool ignora invalidação de
+  // sessão que já foi renovada por outra requisição).
+  let geracao = browserPool.geracaoSessao;
+  // No máximo UMA recuperação de sessão por chamada: se o relogin não resolveu, repetir
+  // só gasta o orçamento de logins do pool (tempestade de logins).
+  let recuperouSessao = false;
+  let tentativa = 0;
   try {
     return await withRetry(
       async () => {
-        if (recarregar) {
+        tentativa += 1;
+        await browserPool.ensureAuthenticated();
+        const atual = browserPool.geracaoSessao;
+        // Se a sessão mudou desde a tentativa anterior (relogin de outra requisição), a SPA
+        // desta aba ainda carrega o token velho: recarrega antes de repetir, senão o 401
+        // dela seria atribuído à sessão NOVA e derrubaria o login que acabou de acontecer.
+        if (recarregar || (tentativa > 1 && atual !== geracao)) {
           recarregar = false;
           try {
             await page.goto('about:blank');
@@ -104,7 +117,7 @@ export async function withBrowserContext<T>(
             // aba morta — a operação vai falhar e o erro segue o fluxo normal
           }
         }
-        await browserPool.ensureAuthenticated();
+        geracao = atual;
         return operation(page);
       },
       {
@@ -116,13 +129,14 @@ export async function withBrowserContext<T>(
           // logins (clearCookies + novo UI-login), o padrão que a Astrea trata
           // como uso indevido. Erros de OPERAÇÃO transitórios seguem retryable.
           if (isLoginError(err)) return false;
-          if (isSessionRecoveryError(err)) return true;
+          if (isSessionRecoveryError(err)) return !recuperouSessao;
           return isRetryablePlaywrightError(err as Error);
         },
         onRetry: (err, attempt) => {
           logger.warn({ err: String(err), attempt }, 'Retentando operação no browser...');
           if (isSessionRecoveryError(err)) {
-            browserPool.invalidateSession();
+            recuperouSessao = true;
+            browserPool.invalidateSession(geracao);
             recarregar = true;
           } else if (/context was destroyed|Target closed|crash/i.test(String(err))) {
             recarregar = true;
@@ -132,6 +146,9 @@ export async function withBrowserContext<T>(
     );
   } catch (err) {
     falhou = true;
+    // Sessão morta detectada na ÚLTIMA tentativa (withRetry não chama onRetry): invalida
+    // mesmo assim, para a próxima requisição relogar em vez de herdar a sessão morta.
+    if (isSessionRecoveryError(err) && !recuperouSessao) browserPool.invalidateSession(geracao);
     throw err;
   } finally {
     // Aba que terminou em erro pode estar quebrada (crash do renderer não fecha a
@@ -390,6 +407,14 @@ export async function gapiCall<T>(
 
 /**
  * Obtém o userId da sessão Angular ativa.
+ *
+ * Sem userId no localStorage, a sessão foi derrubada no servidor (ex.: outro login da
+ * mesma conta — o Astrea mantém uma sessão por usuário) e a SPA limpou o armazenamento.
+ * Isso é SESSION_EXPIRED: withBrowserContext invalida a sessão (uma vez por chamada) e o
+ * pool reloga, dentro do orçamento global de logins (relogin-budget.ts), que é o que
+ * segura tempestade de logins se a chave do localStorage mudar ou outra sessão disputar
+ * a conta. Incidente de 25/09/2026: como AUTH_FAILED (não-retryable), a sessão nunca era
+ * invalidada — `authenticated` seguia true — e a api ficou fora até o redeploy.
  */
 export async function getAstreaUserId(page: Page): Promise<string> {
   const userId = await page.evaluate(() => {
@@ -404,7 +429,9 @@ export async function getAstreaUserId(page: Page): Promise<string> {
     return null;
   });
 
-  if (!userId) throw new Error('AUTH_FAILED: não foi possível obter userId da sessão');
+  if (!userId) {
+    throw new Error('SESSION_EXPIRED: não foi possível obter userId da sessão (sessão derrubada no Astrea?)');
+  }
   return userId;
 }
 

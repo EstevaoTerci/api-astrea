@@ -4,12 +4,14 @@ import { logger } from '../utils/logger.js';
 import { RequestQueue } from './request-queue.js';
 import { WarmPageSlot, naRotaPadrao } from './warm-page-state.js';
 import { LoginCircuitBreaker } from './login-breaker.js';
+import { ReloginBudget } from './relogin-budget.js';
 import {
   classifyPostLoginState,
   formatLoginDiagnostic,
   type LoginSnapshot,
 } from './login-state.js';
 import {
+  descartarSessionState,
   isStateUsable,
   readSessionState,
   redactSession,
@@ -18,6 +20,16 @@ import {
   type PersistedSession,
   type SessionStorageState,
 } from './session-state.js';
+
+/** Rejeita com `mensagem` se `promessa` não assentar em `ms` (a original segue em segundo plano). */
+function comPrazo<T>(promessa: Promise<T>, ms: number, mensagem: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const prazo = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(mensagem)), ms);
+  });
+  promessa.catch(() => {});
+  return Promise.race([promessa, prazo]).finally(() => clearTimeout(timer));
+}
 
 /** Seletores de banner de erro de credencial na tela de login do Astrea. */
 const LOGIN_ALERT_SELECTOR = '.alert-danger, .alert-error, [class*="alerta"], div.toast-error';
@@ -57,6 +69,15 @@ class BrowserPool {
   private readonly warmSlot = new WarmPageSlot<Page>();
   /** Shutdown em andamento: novos acquires esperam terminar e reinicializam. */
   private shuttingDown: Promise<void> | null = null;
+  /**
+   * Geração da sessão: sobe a cada sessão nova (login ou restauro). Quem viu uma sessão
+   * falhar informa a geração que usou; se já existe sessão mais nova, a invalidação é
+   * ignorada (evita derrubar o login que outra requisição acabou de fazer — 1 sessão
+   * por usuário no Astrea).
+   */
+  private geracao = 0;
+  /** Teto de logins pela tela para qualquer gatilho (ver relogin-budget.ts). */
+  private readonly reloginBudget: ReloginBudget;
 
   constructor(maxPages: number) {
     this.maxPages = maxPages;
@@ -64,6 +85,13 @@ class BrowserPool {
     this.loginBreaker = new LoginCircuitBreaker({
       failureThreshold: env.LOGIN_BREAKER_THRESHOLD,
       cooldownMs: env.LOGIN_BREAKER_COOLDOWN_MS,
+    });
+    this.reloginBudget = new ReloginBudget({
+      maxPorJanela: env.RELOGIN_MAX_POR_JANELA,
+      janelaMs: env.RELOGIN_JANELA_MS,
+      bloqueioInicialMs: env.RELOGIN_BLOQUEIO_MS,
+      bloqueioMaxMs: env.RELOGIN_BLOQUEIO_MAX_MS,
+      calmariaMs: 60 * 60_000,
     });
     this.requestQueue = new RequestQueue({
       maxConcurrent: maxPages,
@@ -124,6 +152,7 @@ class BrowserPool {
     if (restored) {
       this.authenticated = true;
       this.sessionRestored = true;
+      this.geracao += 1;
       logger.info(
         { session: redactSession(restored) },
         'Sessão restaurada do storageState (pulando UI-login).',
@@ -229,19 +258,41 @@ class BrowserPool {
     this.scheduleIdleShutdownIfNeeded();
   }
 
+  /** Geração da sessão atual (ver `geracao`). */
+  get geracaoSessao(): number {
+    return this.geracao;
+  }
+
   /**
-   * Invalida a sessão (força re-login na próxima acquirePage).
+   * Invalida a sessão (força re-login na próxima acquirePage) e devolve se invalidou.
    * Marca `forceClearNextLogin` para que o próximo login limpe os cookies stale
    * (a sessão restaurada/anterior se mostrou inválida) antes de re-logar.
+   *
+   * Não invalida (devolve false) quando:
+   *  - há login em voo: quem chamou entra nele pelo ensureAuthenticated (antes, zerar o
+   *    lock abria um 2º login em paralelo que derrubava o 1º);
+   *  - `geracaoVista` é mais velha que a atual: outra requisição já renovou a sessão;
+   *  - a sessão já está invalidada.
    */
-  invalidateSession(): void {
+  invalidateSession(geracaoVista?: number): boolean {
+    if (this.authPromise) {
+      logger.debug('Invalidação ignorada: login em andamento.');
+      return false;
+    }
+    if (geracaoVista !== undefined && geracaoVista !== this.geracao) {
+      logger.debug({ geracaoVista, geracao: this.geracao }, 'Invalidação ignorada: sessão já renovada.');
+      return false;
+    }
+    if (!this.authenticated && this.forceClearNextLogin) return false;
     this.authenticated = false;
-    this.authPromise = null;
     this.forceClearNextLogin = true;
     // A aba quente carrega o estado da sessão antiga: descarta (se em uso, no release).
     const stale = this.warmSlot.invalidate();
     if (stale) void stale.close().catch(() => {});
+    // A sessão persistida também está morta: não restaurá-la num cold start.
+    if (env.SESSION_REUSE) descartarSessionState();
     logger.debug('Sessão invalidada — próximo login será limpo (forceClear).');
+    return true;
   }
 
   /**
@@ -249,6 +300,9 @@ class BrowserPool {
    */
   async clearSession(): Promise<void> {
     if (!this.context) return;
+    // Não limpar cookies no meio de um login em voo (a invalidação seria ignorada e o
+    // login terminaria "autenticado" sem cookies): espera o login assentar antes.
+    if (this.authPromise) await this.authPromise.catch(() => {});
     try {
       await this.context.clearCookies();
       await this.context.clearPermissions();
@@ -284,11 +338,34 @@ class BrowserPool {
       );
     }
 
-    this.authPromise = this._doLogin();
+    // Orçamento de logins (qualquer gatilho): o breaker só conta falhas; login que dá
+    // certo e é derrubado de novo (outra sessão na mesma conta) precisa de teto próprio.
+    // Só logins que DERAM CERTO contam (falhas ficam com o breaker acima).
+    const decisao = this.reloginBudget.verificar(now);
+    if (!decisao.ok) {
+      const retryAfterSec = Math.ceil(decisao.retryAfterMs / 1000);
+      if (decisao.novoBloqueio) {
+        logger.error(
+          { relogins: this.reloginBudget.snapshot(now), retryAfterSec },
+          'Logins demais em pouco tempo: outra sessão pode estar usando a conta do Astrea (1 sessão por usuário) ou o Astrea mudou. Novos logins bloqueados.',
+        );
+      }
+      throw new Error(
+        `LOGIN_CIRCUIT_OPEN: logins demais em pouco tempo (outra sessão usando a conta?); retry em ~${retryAfterSec}s`,
+      );
+    }
+
+    // Prazo TOTAL do login: invalidateSession não zera mais o lock (evita login duplo),
+    // então um _doLogin pendurado (renderer travado no diagnóstico) prenderia todos os
+    // pedidos para sempre. Com o prazo, o lock sempre assenta (vira falha do breaker).
+    const prazoLoginMs = 2 * env.BROWSER_TIMEOUT_MS + env.BROWSER_LOGIN_TIMEOUT_MS + 30_000;
+    this.authPromise = comPrazo(this._doLogin(), prazoLoginMs, 'LOGIN_FAILED_TIMEOUT_TOTAL: login não terminou no prazo');
     try {
       await this.authPromise;
       this.authenticated = true;
       this.authPromise = null;
+      this.geracao += 1;
+      this.reloginBudget.registrarSucesso(Date.now());
       this.loginBreaker.recordSuccess();
       this.logins += 1;
       await this._persistSessionState();
@@ -483,7 +560,8 @@ class BrowserPool {
       // Persiste a sessão mais fresca ANTES de fechar — assim o idle-shutdown não
       // descarta o token (que pode ter sido renovado durante o uso); o próximo
       // cold-start restaura em vez de re-logar.
-      if (this.authenticated) {
+      // Não regrava sessão dada como morta (invalidada e ainda sem novo login).
+      if (this.authenticated && !this.forceClearNextLogin) {
         await this._persistSessionState();
       }
       await this.context.close().catch(() => {});
@@ -577,6 +655,8 @@ class BrowserPool {
         loginFailures: this.loginFailures,
       },
       lastFailure: this.lastLoginFailure,
+      geracaoSessao: this.geracao,
+      relogins: this.reloginBudget.snapshot(now),
     };
   }
 }
