@@ -38,6 +38,9 @@
 2. **[2026-09-25] Edição de .ts com regex via heredoc do Bash perde as barras invertidas (\\d vira d)**
    Do instead: escrever scripts de edição em arquivo (Write) e rodar com node; conferir com grep após editar.
 3. **[2026-09-25] Teste ao vivo sem sujar produção: rodar a api local (PORT=3999, BROWSER_POOL_SIZE=2) e criar só na agenda do usuário de automação (6528036269752320), apagando tudo ao final**
+   CUIDADO (item 4): o login local DERRUBA a sessão da produção — só fora do expediente.
+4. **[2026-09-25] O Astrea mantém UMA sessão por usuário: qualquer login da conta de automação (api local, script, alguém no navegador) derruba a sessão da api em produção**
+   Do instead: nunca rodar api/scripts locais com a conta de produção em horário de uso; se precisar, avisar e rodar fora do expediente. Todo sinal de "sessão morta" (401, sem userId no localStorage) tem de passar por `isSessionRecoveryError` — AUTH_FAILED não invalida a sessão (incidente de 25/09: api presa até o redeploy). O teto de logins fica no pool (`relogin-budget.ts`), não em cada gatilho.
    Do instead: registrar ids criados/apagados em docs/agenda-eventos-discovery.md; no Windows, parar o node pela porta (TaskStop não mata o filho).
 
 ## User Directives

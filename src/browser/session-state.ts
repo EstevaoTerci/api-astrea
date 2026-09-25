@@ -104,6 +104,19 @@ export function writeSessionStateAtomic(
 }
 
 /**
+ * Neutraliza o estado persistido (sessão comprovadamente morta): grava um estado vazio
+ * com savedAt=0, que `isStateUsable` rejeita. Sem isso, um cold start restauraria a sessão
+ * morta e a 1ª requisição pagaria a detecção. Best-effort, nunca lança.
+ */
+export function descartarSessionState(deps: SessionDeps = {}): void {
+  try {
+    writeSessionStateAtomic({ cookies: [], origins: [] }, 0, deps);
+  } catch {
+    // ignore
+  }
+}
+
+/**
  * Decide se vale RESTAURAR a sessão persistida. Conservador: descarta estados
  * vazios, antigos demais (> maxAgeMs) ou com todos os cookies persistentes
  * expirados. NÃO valida a sessão server-side — isso fica para o probe implícito
@@ -153,6 +166,8 @@ export function redactSession(persisted: PersistedSession): {
 
 /** Idade (ms) da sessão persistida, ou null. Útil para o /health. */
 export function sessionAgeMs(persisted: PersistedSession | null, now: number): number | null {
+  // savedAt <= 0 = sessão descartada (descartarSessionState): não há idade a mostrar.
+  if (persisted && typeof persisted.savedAt === 'number' && persisted.savedAt <= 0) return null;
   if (!persisted || typeof persisted.savedAt !== 'number') return null;
   return Math.max(0, now - persisted.savedAt);
 }

@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  descartarSessionState,
   isStateUsable,
+  sessionAgeMs,
   readSessionState,
   writeSessionStateAtomic,
   redactSession,
@@ -162,6 +164,32 @@ describe('writeSessionStateAtomic', () => {
     expect(written.storageState.cookies[0].name).toBe('sessionId');
     // O arquivo temporário não fica para trás.
     expect(Object.keys(fs.files)).toEqual(['/tmp/x.json']);
+  });
+});
+
+describe('descartarSessionState', () => {
+  it('neutraliza a sessão salva: o que fica no disco não é restaurável', () => {
+    const fs = makeFakeFs();
+    writeSessionStateAtomic(storageState(), NOW, { fs, path: '/tmp/x.json' });
+    expect(isStateUsable(readSessionState({ fs, path: '/tmp/x.json' }), NOW + 1000, SIX_HOURS)).toBe(true);
+
+    descartarSessionState({ fs, path: '/tmp/x.json' });
+
+    expect(isStateUsable(readSessionState({ fs, path: '/tmp/x.json' }), NOW + 1000, SIX_HOURS)).toBe(false);
+  });
+
+  it('/health não mostra idade absurda de sessão descartada (savedAt=0)', () => {
+    const fs = makeFakeFs();
+    descartarSessionState({ fs, path: '/tmp/x.json' });
+    expect(sessionAgeMs(readSessionState({ fs, path: '/tmp/x.json' }), NOW)).toBeNull();
+  });
+
+  it('nunca lança (best-effort)', () => {
+    const fs = makeFakeFs();
+    vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {
+      throw new Error('disco cheio');
+    });
+    expect(() => descartarSessionState({ fs, path: '/tmp/x.json' })).not.toThrow();
   });
 });
 

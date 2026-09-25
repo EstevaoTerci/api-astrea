@@ -33,6 +33,13 @@ const envSchema = z.object({
   // Astrea). Abre após N falhas consecutivas e segura novos logins por cooldown.
   LOGIN_BREAKER_THRESHOLD: z.coerce.number().int().min(1).default(3),
   LOGIN_BREAKER_COOLDOWN_MS: z.coerce.number().int().min(0).default(60000),
+  // Orçamento de logins pela tela para QUALQUER gatilho (ver browser/relogin-budget.ts):
+  // o breaker acima só conta falhas; este teto segura tempestade de logins BEM-sucedidos
+  // (outra sessão disputando a conta — o Astrea mantém 1 sessão por usuário).
+  RELOGIN_MAX_POR_JANELA: z.coerce.number().int().min(1).default(3),
+  RELOGIN_JANELA_MS: z.coerce.number().int().min(1000).default(600_000),
+  RELOGIN_BLOQUEIO_MS: z.coerce.number().int().min(1000).default(600_000),
+  RELOGIN_BLOQUEIO_MAX_MS: z.coerce.number().int().min(1000).default(1_800_000),
   BROWSER_IDLE_TTL_MS: z.coerce.number().int().min(0).default(900000),
   BROWSER_EXECUTABLE_PATH: z.string().optional(),
   BROWSER_HEADLESS: z
