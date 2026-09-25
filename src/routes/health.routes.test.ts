@@ -50,6 +50,16 @@ vi.mock('../services/clientes.service.js', () => ({
   }),
 }));
 
+vi.mock('../services/agenda-eventos.service.js', () => ({
+  getDisponibilidadeCacheStats: vi.fn().mockReturnValue({
+    hits: 4,
+    misses: 2,
+    inflightShared: 0,
+    entries: 1,
+    hitRatio: 0.667,
+  }),
+}));
+
 vi.mock('../middleware/rate-limiter.js', () => ({
   getRateLimiterStats: vi.fn().mockReturnValue({
     windowMs: 60_000,
@@ -65,6 +75,7 @@ import {
   getAniversariantesCacheStats,
 } from '../services/clientes.service.js';
 import { getRateLimiterStats } from '../middleware/rate-limiter.js';
+import { getDisponibilidadeCacheStats } from '../services/agenda-eventos.service.js';
 
 function buildHealthApp() {
   return buildApp((app) => app.use('/health', healthRouter));
@@ -144,6 +155,19 @@ describe('GET /health', () => {
       hitRatio: 0.923,
     });
     expect(getAniversariantesCacheStats).toHaveBeenCalled();
+  });
+
+  it('expõe stats do cache de disponibilidade da agenda', async () => {
+    const res = await request(buildHealthApp()).get('/health');
+
+    expect(res.body.cache.disponibilidade).toEqual({
+      hits: 4,
+      misses: 2,
+      inflightShared: 0,
+      entries: 1,
+      hitRatio: 0.667,
+    });
+    expect(getDisponibilidadeCacheStats).toHaveBeenCalled();
   });
 
   it('expõe stats de login (breaker, sessão, contadores)', async () => {

@@ -22,11 +22,11 @@ import type { FiltrosAgenda, ServiceResponse } from '../types/index.js';
 // Tipos internos do payload do Astrea
 // ─────────────────────────────────────────────────────────────────────────────
 
-type AstreaActivityType = 'TASK' | 'DEADLINE' | 'EVENT' | 'HEARING';
+export type AstreaActivityType = 'TASK' | 'DEADLINE' | 'EVENT' | 'HEARING';
 type AstreaActivityStatus = 'IN_PROGRESS' | 'DONE' | string;
-type AstreaQueryStatus = 'ALL' | 'IN_PROGRESS' | 'DONE';
+export type AstreaQueryStatus = 'ALL' | 'IN_PROGRESS' | 'DONE';
 
-interface AstreaActivity {
+export interface AstreaActivity {
   id: number | string;
   type: AstreaActivityType;
   allDay: boolean;
@@ -79,7 +79,7 @@ const TIPO_TO_FLAG: Record<TipoEventoAgenda, keyof AstreaSelectFlags> = {
   audiencia: 'hearingSelected',
 };
 
-interface AstreaSelectFlags {
+export interface AstreaSelectFlags {
   appointmentSelected: boolean;
   deadlineSelected: boolean;
   hearingSelected: boolean;
@@ -147,12 +147,13 @@ function fimDiaBrtComoUtc(iso: string): string {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function mapStatus(status?: AstreaActivityStatus, done?: boolean): StatusEventoAgenda {
+  if (status === 'CANCELED' || status === 'CANCELLED') return 'cancelado';
   if (done === true) return 'concluido';
   if (status === 'DONE') return 'concluido';
   return 'pendente';
 }
 
-function mapAtividade(a: AstreaActivity, usuariosPorId: Map<string, Usuario>): EventoAgenda {
+export function mapAtividade(a: AstreaActivity, usuariosPorId: Map<string, Usuario>): EventoAgenda {
   const responsavelId = a.responsibleId != null ? String(a.responsibleId) : '';
   const responsavel = usuariosPorId.get(responsavelId);
   const envolvidosIds = (a.involvedIds ?? [])
@@ -198,7 +199,7 @@ function mapAtividade(a: AstreaActivity, usuariosPorId: Map<string, Usuario>): E
 // Construção do payload
 // ─────────────────────────────────────────────────────────────────────────────
 
-function flagsParaTipos(tipos: TipoEventoAgenda[] | undefined): AstreaSelectFlags {
+export function flagsParaTipos(tipos: TipoEventoAgenda[] | undefined): AstreaSelectFlags {
   const todos: TipoEventoAgenda[] = ['prazo', 'tarefa', 'atendimento', 'audiencia'];
   const habilitados = new Set(tipos && tipos.length > 0 ? tipos : todos);
   const flags: AstreaSelectFlags = {
@@ -326,7 +327,7 @@ export async function listarAgenda(
 // Fetch helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function fetchCalendarPro(
+export async function fetchCalendarPro(
   page: Page,
   args: {
     sessionUserId: string;

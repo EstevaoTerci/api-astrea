@@ -5,6 +5,7 @@ import {
   getListarClientesCacheStats,
 } from '../services/clientes.service.js';
 import { getRateLimiterStats } from '../middleware/rate-limiter.js';
+import { getDisponibilidadeCacheStats } from '../services/agenda-eventos.service.js';
 
 const router = Router();
 
@@ -22,6 +23,7 @@ router.get('/', (_req: Request, res: Response) => {
     cache: {
       listarClientes: getListarClientesCacheStats(),
       aniversariantes: getAniversariantesCacheStats(),
+      disponibilidade: getDisponibilidadeCacheStats(),
     },
     rateLimit: getRateLimiterStats(),
     memory: {

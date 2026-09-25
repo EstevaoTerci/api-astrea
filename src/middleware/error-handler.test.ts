@@ -103,6 +103,13 @@ describe('errorHandler — mapeamento de erros do scraping', () => {
     expect(res.body.code).toBe('NOT_FOUND');
   });
 
+  it('CONFLICT → 409', async () => {
+    const res = await request(appThatThrows(new Error('CONFLICT: horário ocupado no Astrea'))).get('/boom');
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('CONFLICT');
+    expect(res.body.error).toBe('horário ocupado no Astrea');
+  });
+
   it('timeout (case-insensitive) → 504', async () => {
     const res = await request(appThatThrows(new Error('Operation Timeout exceeded'))).get('/boom');
     expect(res.status).toBe(504);

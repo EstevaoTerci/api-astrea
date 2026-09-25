@@ -43,6 +43,27 @@ import {
   moverAtividade,
 } from '../services/kanban.service.js';
 import { listarAgenda } from '../services/agenda.service.js';
+import {
+  buscarEventoAgenda,
+  buscarEventosPorContato,
+  calcularDisponibilidade,
+  cancelarEventoAgenda,
+  criarEventoAgenda,
+  remarcarEventoAgenda,
+} from '../services/agenda-eventos.service.js';
+import type { ServiceResponse } from '../types/index.js';
+
+/** Resposta MCP padrão para um ServiceResponse (erro → isError com código). */
+function mcpResultado<T>(result: ServiceResponse<T>) {
+  if (!result.ok) {
+    const detalhes = result.error.details ? `\n${JSON.stringify(result.error.details, null, 2)}` : '';
+    return {
+      content: [{ type: 'text' as const, text: `Erro (${result.error.code}): ${result.error.message}${detalhes}` }],
+      isError: true,
+    };
+  }
+  return { content: [{ type: 'text' as const, text: JSON.stringify(result.data, null, 2) }] };
+}
 
 export function createMcpServer(): McpServer {
   const server = new McpServer({
@@ -802,6 +823,96 @@ export function createMcpServer(): McpServer {
       const output = result.meta ? { data: result.data, meta: result.meta } : result.data;
       return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
     },
+  );
+
+  server.tool(
+    'consultar_disponibilidade_agenda',
+    'Retorna os intervalos OCUPADOS na agenda do Astrea de um ou mais usuários (advogados/secretárias) numa janela de até 31 dias, já aplicando as regras de bloqueio: evento de dia inteiro ("BLOQUEADO") ocupa o dia todo; evento em que a pessoa é apenas ENVOLVIDA também ocupa; evento sem hora de fim assume duracaoPadraoMin (default 30). Intervalos sobrepostos são fundidos e trazem em `origens` os eventos que os explicam. Use para saber se um horário está livre antes de oferecer/marcar consulta. Horários em ISO com offset -03:00, intervalos semiabertos [inicio, fim). Descubra os IDs via `listar_usuarios`. Cache de 60 s; `fresh: true` ignora o cache.',
+    {
+      responsavelIds: z.array(z.string()).min(1).max(20),
+      inicio: z.string().describe('YYYY-MM-DD'),
+      fim: z.string().describe('YYYY-MM-DD (inclusivo, janela máx. 31 dias)'),
+      tipos: z.array(z.enum(['prazo', 'tarefa', 'atendimento', 'audiencia'])).optional(),
+      duracaoPadraoMin: z.number().int().min(5).max(240).optional(),
+      fresh: z.boolean().optional(),
+    },
+    async (input) => {
+      const result = await calcularDisponibilidade({ ...input, incluirTitulos: true });
+      if (!result.ok) {
+        return {
+          content: [{ type: 'text', text: `Erro (${result.error.code}): ${result.error.message}` }],
+          isError: true,
+        };
+      }
+      return { content: [{ type: 'text', text: JSON.stringify(result.data, null, 2) }] };
+    },
+  );
+
+  server.tool(
+    'criar_evento_agenda',
+    'Cria um compromisso (evento tipo "atendimento") na agenda do Astrea para um advogado/usuário (responsavelId). Por padrão recusa com CONFLICT se o responsável já tiver compromisso no horário (verificarConflito=false força). Se `contato` for informado (nome + telefone, sem CPF), acha o contato pelo nome (confirmando o telefone) ou o cria, abre um Atendimento de CRM e vincula ao evento — em melhor esforço (`parcial=true` + `erros` se alguma etapa acessória falhar). `chaveExterna` torna a chamada segura para retry: repetir com a mesma chave devolve o evento já criado (`reaproveitado=true`) em vez de duplicar. Título no padrão do escritório: "ATENDIMENTO INICIAL - NOME - ONLINE" ou "- PRESENCIAL".',
+    {
+      titulo: z.string(),
+      data: z.string().describe('YYYY-MM-DD'),
+      horaInicio: z.string().optional().describe('HH:mm (obrigatória se não for dia inteiro)'),
+      horaFim: z.string().optional().describe('HH:mm (default: início + 30 min)'),
+      diaTodo: z.boolean().optional(),
+      responsavelId: z.string(),
+      envolvidosIds: z.array(z.string()).optional(),
+      comentarios: z.string().optional(),
+      chaveExterna: z.string().optional(),
+      modalidade: z.enum(['remoto', 'presencial']).optional(),
+      endereco: z.string().optional(),
+      casoId: z.string().optional(),
+      contato: z.object({ nome: z.string(), telefone: z.string().optional(), email: z.string().optional() }).optional(),
+      criarAtendimento: z.boolean().optional(),
+      verificarConflito: z.boolean().optional(),
+    },
+    async (input) => mcpResultado(await criarEventoAgenda(input)),
+  );
+
+  server.tool(
+    'buscar_evento_agenda',
+    'Carrega um compromisso da agenda do Astrea pelo id (título, data/hora, responsável, envolvidos, caso vinculado, observações, status).',
+    { id: z.string() },
+    async ({ id }) => mcpResultado(await buscarEventoAgenda(id)),
+  );
+
+  server.tool(
+    'buscar_eventos_do_contato',
+    'Lista compromissos de um lead/cliente numa janela (≤ 31 dias) para os responsáveis informados: acha pelo marcador [ref:chaveExterna] nas observações, pelo caso/atendimento do contato encontrado pelo telefone, ou pelo telefone escrito nas observações. Exige telefone ou chaveExterna (nome só refina). Cancelados ficam de fora (incluirCancelados=true para ver). Use antes de afirmar que alguém NÃO tem consulta marcada; lista vazia ainda pode ser consulta marcada sem vínculo — na dúvida, confirme com a equipe.',
+    {
+      telefone: z.string().optional(),
+      nome: z.string().optional(),
+      chaveExterna: z.string().optional(),
+      inicio: z.string().describe('YYYY-MM-DD'),
+      fim: z.string().describe('YYYY-MM-DD'),
+      responsavelIds: z.array(z.string()).min(1),
+      incluirCancelados: z.boolean().optional(),
+    },
+    async (input) => mcpResultado(await buscarEventosPorContato(input)),
+  );
+
+  server.tool(
+    'remarcar_evento_agenda',
+    'Remarca um compromisso da agenda do Astrea (nova data/hora). Confere conflito na nova data quando responsavelId é informado (verificarConflito=false dispensa).',
+    {
+      id: z.string(),
+      data: z.string().describe('YYYY-MM-DD'),
+      horaInicio: z.string().optional(),
+      horaFim: z.string().optional(),
+      diaTodo: z.boolean().optional(),
+      responsavelId: z.string().optional(),
+      verificarConflito: z.boolean().optional(),
+    },
+    async ({ id, ...input }) => mcpResultado(await remarcarEventoAgenda(id, input, { forcar: true })),
+  );
+
+  server.tool(
+    'cancelar_evento_agenda',
+    'Cancela um compromisso da agenda do Astrea (status CANCELADO — mantém o histórico; não exclui).',
+    { id: z.string(), motivo: z.string().optional() },
+    async ({ id, motivo }) => mcpResultado(await cancelarEventoAgenda(id, motivo, { forcar: true })),
   );
 
   server.tool('listar_usuarios', 'Lista usuários/advogados do escritório.', {}, async () => {

@@ -31,6 +31,10 @@ A primeira pergunta ao implementar qualquer fluxo novo: **existe endpoint REST n
 
 Quando precisar descobrir um endpoint, use Playwright em modo visível (`headless: false`) e capture as requests da UI real — registrar listeners de network ANTES de qualquer ação, e atenção a abas novas (`context.on('page')` é essencial pra rastrear janelas que o Astrea abre via `target=_blank` ou `window.open`). Padrão de script de discovery em [scripts/discover-birthdays-batch.mjs](scripts/discover-birthdays-batch.mjs).
 
+### Agenda (compromissos) — contrato confirmado em runtime
+
+Criar/ler/remarcar/cancelar/excluir compromisso: `/api/v2/appointments` (ver [docs/agenda-eventos-discovery.md](docs/agenda-eventos-discovery.md)). Na leitura por id, as observações estão em `descriptionDetails` (o `comments` desse DTO é log); na listagem `/calendar-pro/complete`, as observações estão em `comments` e cancelados vêm com `status: CANCELED`. A busca de contatos NÃO indexa telefone — só nome.
+
 ### Endpoint preferido por caso de uso
 
 - **Varredura de aniversariantes** (`mesAniversario` em janelas de dias/mês): use `listar_aniversariantes(mes)` — retorna `Cliente[]` JÁ com `dataNascimento`, `cpfCnpj`, telefone, email em UMA chamada. NÃO use o padrão antigo `listar_todos_clientes(mes) + N×buscar_cliente(id)` — esse caminho ainda existe, mas custa N round-trips em vez de 1.

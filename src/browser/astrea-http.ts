@@ -82,11 +82,28 @@ function isSessionRecoveryError(err: unknown): boolean {
  * Todas as páginas compartilham cookies/sessão (single-context), permitindo
  * paralelismo real sem conflito de sessão no Astrea.
  */
-export async function withBrowserContext<T>(operation: (page: Page) => Promise<T>): Promise<T> {
-  const page = await browserPool.acquirePage();
+export async function withBrowserContext<T>(
+  operation: (page: Page) => Promise<T>,
+  options: { warm?: boolean } = {},
+): Promise<T> {
+  // warm: reutiliza a aba estacionada do pool (sem boot da SPA). Ver warm-page-state.ts.
+  const page = await browserPool.acquirePage({ warm: options.warm === true });
+  // Depois de erro de sessão/contexto a SPA da aba guarda estado velho (token,
+  // injector): a retentativa força uma navegação completa em vez do atalho de
+  // rota igual do navigateTo.
+  let recarregar = false;
+  let falhou = false;
   try {
     return await withRetry(
       async () => {
+        if (recarregar) {
+          recarregar = false;
+          try {
+            await page.goto('about:blank');
+          } catch {
+            // aba morta — a operação vai falhar e o erro segue o fluxo normal
+          }
+        }
         await browserPool.ensureAuthenticated();
         return operation(page);
       },
@@ -106,80 +123,109 @@ export async function withBrowserContext<T>(operation: (page: Page) => Promise<T
           logger.warn({ err: String(err), attempt }, 'Retentando operação no browser...');
           if (isSessionRecoveryError(err)) {
             browserPool.invalidateSession();
+            recarregar = true;
+          } else if (/context was destroyed|Target closed|crash/i.test(String(err))) {
+            recarregar = true;
           }
         },
       },
     );
+  } catch (err) {
+    falhou = true;
+    throw err;
   } finally {
-    await browserPool.releasePage(page);
+    // Aba que terminou em erro pode estar quebrada (crash do renderer não fecha a
+    // página): não é estacionada como aba quente.
+    await browserPool.releasePage(page, { descartar: falhou });
   }
+}
+
+type MetodoHttp = 'GET' | 'POST' | 'PUT' | 'DELETE';
+
+/** Timeout padrão das chamadas REST via $http (antes não havia nenhum). */
+export const TIMEOUT_REST_MS = 60_000;
+
+/**
+ * Chamada REST autenticada via Angular $http, com timeout (Promise.race dentro do
+ * evaluate — o page.evaluate do Playwright não tem timeout próprio). Mensagem de
+ * timeout: "Timeout <ms>ms em <MÉTODO> <url>" (reconhecida por /timeout/i).
+ */
+async function astreaHttp<T>(
+  page: Page,
+  method: MetodoHttp,
+  url: string,
+  body: unknown,
+  timeoutMs: number,
+): Promise<T> {
+  return page.evaluate(
+    async (args: { method: MetodoHttp; url: string; body: unknown; timeoutMs: number }) => {
+      const http = (window as any).angular?.element(document.body)?.injector()?.get('$http');
+      if (!http) throw new Error('Angular $http não disponível');
+
+      const req = (async () => {
+        try {
+          const res =
+            args.method === 'GET'
+              ? await http.get(args.url)
+              : args.method === 'DELETE'
+                ? await http.delete(args.url)
+                : args.method === 'PUT'
+                  ? await http.put(args.url, args.body)
+                  : await http.post(args.url, args.body);
+          return res.data;
+        } catch (err: any) {
+          const status = err?.status ?? 'UNKNOWN';
+          const rawMessage =
+            err?.data?.errorMessage ?? err?.data ?? err?.message ?? err?.statusText ?? err;
+          const detail = typeof rawMessage === 'string' ? rawMessage : JSON.stringify(rawMessage);
+          throw new Error(`API_ERROR_${status}: ${detail}`);
+        }
+      })();
+
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`Timeout ${args.timeoutMs}ms em ${args.method} ${args.url}`)),
+          args.timeoutMs,
+        );
+      });
+      try {
+        return await Promise.race([req, timeout]);
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+    { method, url, body, timeoutMs },
+  ) as Promise<T>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // API REST — helpers via Angular $http (sessão automática)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** GET para a API REST do Astrea via Angular $http. */
-export async function astreaApiGet<T>(page: Page, path: string): Promise<T> {
-  return page.evaluate(async (url: string) => {
-    const http = (window as any).angular?.element(document.body)?.injector()?.get('$http');
-    if (!http) throw new Error('Angular $http não disponível');
-
-    try {
-      const res = await http.get(url);
-      return res.data as T;
-    } catch (err: any) {
-      const status = err?.status ?? 'UNKNOWN';
-      const rawMessage =
-        err?.data?.errorMessage ?? err?.data ?? err?.message ?? err?.statusText ?? err;
-      const detail = typeof rawMessage === 'string' ? rawMessage : JSON.stringify(rawMessage);
-      throw new Error(`API_ERROR_${status}: ${detail}`);
-    }
-  }, `${ASTREA_API}${path}`);
+/** GET para a API REST do Astrea via Angular $http (timeout padrão 60 s). */
+export async function astreaApiGet<T>(page: Page, path: string, timeoutMs = TIMEOUT_REST_MS): Promise<T> {
+  return astreaHttp<T>(page, 'GET', `${ASTREA_API}${path}`, undefined, timeoutMs);
 }
 
-/** POST para a API REST do Astrea via Angular $http. */
-export async function astreaApiPost<T>(page: Page, path: string, body: unknown): Promise<T> {
-  return page.evaluate(
-    async ({ url, body }: { url: string; body: unknown }) => {
-      const http = (window as any).angular?.element(document.body)?.injector()?.get('$http');
-      if (!http) throw new Error('Angular $http não disponível');
-
-      try {
-        const res = await http.post(url, body);
-        return res.data as T;
-      } catch (err: any) {
-        const status = err?.status ?? 'UNKNOWN';
-        const rawMessage =
-          err?.data?.errorMessage ?? err?.data ?? err?.message ?? err?.statusText ?? err;
-        const detail = typeof rawMessage === 'string' ? rawMessage : JSON.stringify(rawMessage);
-        throw new Error(`API_ERROR_${status}: ${detail}`);
-      }
-    },
-    { url: `${ASTREA_API}${path}`, body },
-  );
+/** POST para a API REST do Astrea via Angular $http (timeout padrão 60 s). */
+export async function astreaApiPost<T>(
+  page: Page,
+  path: string,
+  body: unknown,
+  timeoutMs = TIMEOUT_REST_MS,
+): Promise<T> {
+  return astreaHttp<T>(page, 'POST', `${ASTREA_API}${path}`, body, timeoutMs);
 }
 
-/** PUT para a API REST do Astrea via Angular $http. */
-export async function astreaApiPut<T>(page: Page, path: string, body: unknown): Promise<T> {
-  return page.evaluate(
-    async ({ url, body }: { url: string; body: unknown }) => {
-      const http = (window as any).angular?.element(document.body)?.injector()?.get('$http');
-      if (!http) throw new Error('Angular $http não disponível');
-
-      try {
-        const res = await http.put(url, body);
-        return res.data as T;
-      } catch (err: any) {
-        const status = err?.status ?? 'UNKNOWN';
-        const rawMessage =
-          err?.data?.errorMessage ?? err?.data ?? err?.message ?? err?.statusText ?? err;
-        const detail = typeof rawMessage === 'string' ? rawMessage : JSON.stringify(rawMessage);
-        throw new Error(`API_ERROR_${status}: ${detail}`);
-      }
-    },
-    { url: `${ASTREA_API}${path}`, body },
-  );
+/** PUT para a API REST do Astrea via Angular $http (timeout padrão 60 s). */
+export async function astreaApiPut<T>(
+  page: Page,
+  path: string,
+  body: unknown,
+  timeoutMs = TIMEOUT_REST_MS,
+): Promise<T> {
+  return astreaHttp<T>(page, 'PUT', `${ASTREA_API}${path}`, body, timeoutMs);
 }
 
 /**
@@ -204,23 +250,9 @@ export async function astreaAppGet<T>(page: Page, path: string): Promise<T> {
   }, `${ASTREA_APP}${path}`);
 }
 
-/** DELETE para a API REST do Astrea via Angular $http. */
-export async function astreaApiDelete<T>(page: Page, path: string): Promise<T> {
-  return page.evaluate(async (url: string) => {
-    const http = (window as any).angular?.element(document.body)?.injector()?.get('$http');
-    if (!http) throw new Error('Angular $http não disponível');
-
-    try {
-      const res = await http.delete(url);
-      return res.data as T;
-    } catch (err: any) {
-      const status = err?.status ?? 'UNKNOWN';
-      const rawMessage =
-        err?.data?.errorMessage ?? err?.data ?? err?.message ?? err?.statusText ?? err;
-      const detail = typeof rawMessage === 'string' ? rawMessage : JSON.stringify(rawMessage);
-      throw new Error(`API_ERROR_${status}: ${detail}`);
-    }
-  }, `${ASTREA_API}${path}`);
+/** DELETE para a API REST do Astrea via Angular $http (timeout padrão 60 s). */
+export async function astreaApiDelete<T>(page: Page, path: string, timeoutMs = TIMEOUT_REST_MS): Promise<T> {
+  return astreaHttp<T>(page, 'DELETE', `${ASTREA_API}${path}`, undefined, timeoutMs);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

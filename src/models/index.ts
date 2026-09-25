@@ -73,4 +73,13 @@ export type {
   EventoAgenda,
   TipoEventoAgenda,
   StatusEventoAgenda,
+  OrigemOcupacao,
+  IntervaloOcupado,
+  DisponibilidadeAgenda,
+  ContatoEventoInput,
+  CriarEventoAgendaInput,
+  EventoAgendaCriado,
+  ResultadoCriacaoEvento,
+  RemarcarEventoAgendaInput,
+  EventoDoContato,
 } from './agenda.js';

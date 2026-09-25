@@ -2,6 +2,7 @@ import { Browser, BrowserContext, Page, chromium } from 'playwright';
 import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
 import { RequestQueue } from './request-queue.js';
+import { WarmPageSlot, naRotaPadrao } from './warm-page-state.js';
 import { LoginCircuitBreaker } from './login-breaker.js';
 import {
   classifyPostLoginState,
@@ -52,6 +53,10 @@ class BrowserPool {
   private logins = 0;
   private loginFailures = 0;
   private lastLoginFailure: { message: string; at: number } | null = null;
+  /** Aba quente (estacionada entre chamadas `warm`) — ver warm-page-state.ts. */
+  private readonly warmSlot = new WarmPageSlot<Page>();
+  /** Shutdown em andamento: novos acquires esperam terminar e reinicializam. */
+  private shuttingDown: Promise<void> | null = null;
 
   constructor(maxPages: number) {
     this.maxPages = maxPages;
@@ -150,8 +155,9 @@ class BrowserPool {
    * - Se a sessão não está ativa, faz login (com lock para evitar logins paralelos)
    * - Cria nova aba no contexto compartilhado
    */
-  async acquirePage(): Promise<Page> {
+  async acquirePage(options: { warm?: boolean } = {}): Promise<Page> {
     this.clearIdleShutdownTimer();
+    if (this.shuttingDown) await this.shuttingDown.catch(() => {});
     await this.initialize();
     await this.requestQueue.enqueue();
 
@@ -160,7 +166,24 @@ class BrowserPool {
         await this._ensureAuthenticated();
       }
 
+      // A aba estacionada conta contra o teto (BROWSER_POOL_SIZE): se uma aba comum
+      // vai lotar o pool, fecha a estacionada antes (risco de uso indevido na Astrea).
+      if (!options.warm && this.warmSlot.stats.parked && this.activePagesCount + 1 >= this.maxPages) {
+        const estacionada = this.warmSlot.invalidate();
+        if (estacionada) await estacionada.close().catch(() => {});
+      }
+
+      if (options.warm) {
+        const reused = this.warmSlot.take((p) => !p.isClosed());
+        if (reused) {
+          this.activePagesCount++;
+          logger.debug({ activePages: this.activePagesCount }, 'Aba quente reutilizada do pool.');
+          return reused;
+        }
+      }
+
       const page = await this.context!.newPage();
+      if (options.warm) this.warmSlot.adopt(page);
       this.activePagesCount++;
       logger.debug({ activePages: this.activePagesCount }, 'Página adquirida do pool.');
       return page;
@@ -181,11 +204,24 @@ class BrowserPool {
   /**
    * Libera uma página (fecha a aba) e devolve o slot para a fila.
    */
-  async releasePage(page: Page): Promise<void> {
-    try {
-      await page.close().catch(() => {});
-    } catch {
-      // ignorado — página pode já estar fechada
+  async releasePage(page: Page, options: { descartar?: boolean } = {}): Promise<void> {
+    // Aba quente é estacionada (não fechada) para a próxima chamada `warm` — só se a
+    // operação terminou bem, a aba está viva e na rota de estacionamento.
+    let reutilizavel = options.descartar !== true;
+    if (reutilizavel) {
+      try {
+        reutilizavel = !page.isClosed() && naRotaPadrao(page.url());
+      } catch {
+        reutilizavel = false;
+      }
+    }
+    const parked = this.warmSlot.release(page, reutilizavel);
+    if (!parked) {
+      try {
+        await page.close().catch(() => {});
+      } catch {
+        // ignorado — página pode já estar fechada
+      }
     }
     this.activePagesCount = Math.max(0, this.activePagesCount - 1);
     logger.debug({ activePages: this.activePagesCount }, 'Página liberada do pool.');
@@ -202,6 +238,9 @@ class BrowserPool {
     this.authenticated = false;
     this.authPromise = null;
     this.forceClearNextLogin = true;
+    // A aba quente carrega o estado da sessão antiga: descarta (se em uso, no release).
+    const stale = this.warmSlot.invalidate();
+    if (stale) void stale.close().catch(() => {});
     logger.debug('Sessão invalidada — próximo login será limpo (forceClear).');
   }
 
@@ -427,6 +466,16 @@ class BrowserPool {
   }
 
   async shutdown(): Promise<void> {
+    if (this.shuttingDown) return this.shuttingDown;
+    // Síncrono: a partir daqui ninguém pega a aba quente nem entra no pool até o fim.
+    this.warmSlot.reset();
+    this.shuttingDown = this._shutdown().finally(() => {
+      this.shuttingDown = null;
+    });
+    return this.shuttingDown;
+  }
+
+  private async _shutdown(): Promise<void> {
     this.clearIdleShutdownTimer();
     logger.info('Encerrando pool de browser...');
 
@@ -450,6 +499,7 @@ class BrowserPool {
     this.authPromise = null;
     this.initPromise = null;
     this.activePagesCount = 0;
+    this.warmSlot.reset();
     logger.info('Pool de browser encerrado.');
   }
 
@@ -493,9 +543,10 @@ class BrowserPool {
       pool: {
         total: this.maxPages,
         inUse: this.activePagesCount,
-        available: this.maxPages - this.activePagesCount,
+        available: this.maxPages - this.activePagesCount - (this.warmSlot.stats.parked ? 1 : 0),
         idleTtlMs: this.idleTtlMs,
         initialized: !!this.browser && !!this.context,
+        warm: this.warmSlot.stats,
       },
       queue: this.requestQueue.stats,
     };

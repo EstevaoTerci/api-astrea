@@ -933,27 +933,67 @@ export async function mesclarClientes(
   }
 }
 
+/**
+ * Cria o contato usando uma aba JÁ autenticada (sem abrir outra). Navega para o
+ * formulário de novo contato para ler o rascunho padrão do Angular. Devolve o id.
+ * Usado por `criarCliente` e pela agenda (lead vira contato ao agendar consulta).
+ */
+export async function criarContatoNaPagina(page: Page, input: CriarClienteInput): Promise<string> {
+  const baseDraft = await loadDefaultContactDraft(page);
+  const payload = buildContactPayload(baseDraft, input);
+
+  const response = await astreaApiPost<AstreaSaveContactResponse>(page, `/contact/save`, payload);
+
+  const createdContactId = response.response;
+  if (createdContactId == null || createdContactId === 'NOT_OK') {
+    throw new Error(
+      `API_ERROR: ${response.errorMessage || 'Astrea não retornou o ID do contato criado'}`,
+    );
+  }
+
+  return String(createdContactId);
+}
+
+/**
+ * Busca textual de contatos (POST /contact/all) numa aba já autenticada e na rota
+ * Angular — UMA chamada, sem enriquecer com /details. Devolve o resumo (id, nome,
+ * telefone principal…).
+ */
+export async function buscarContatosNaPagina(
+  page: Page,
+  texto: string,
+  limite = 20,
+): Promise<ClienteResumido[]> {
+  const response = await astreaApiPost<AstreaContactListResponse>(
+    page,
+    `/contact/all`,
+    buildSearchPayload({ text: texto }, 0, limite),
+  );
+  return (response.contacts ?? []).map(mapContactListItemResumido);
+}
+
+/**
+ * Mesmo telefone? Compara os 8 últimos dígitos — tolera máscara, DDI (+55), DDD
+ * ausente e o "9" extra de celular, que variam entre o WhatsApp e o cadastro.
+ */
+export function telefonesIguais(a?: string, b?: string): boolean {
+  const nacional = (s?: string) => {
+    let d = (s ?? '').replace(/\D/g, '');
+    if (d.length >= 12 && d.startsWith('55')) d = d.slice(2);
+    return d;
+  };
+  const da = nacional(a);
+  const db = nacional(b);
+  if (da.length < 8 || db.length < 8) return false;
+  if (da.slice(-8) !== db.slice(-8)) return false;
+  // Com DDD dos dois lados (10–11 dígitos), o DDD também precisa bater.
+  if (da.length >= 10 && db.length >= 10) return da.slice(0, 2) === db.slice(0, 2);
+  return true;
+}
+
 export async function criarCliente(input: CriarClienteInput): Promise<ServiceResponse<Cliente>> {
   try {
-    const contactId = await withBrowserContext(async (page) => {
-      const baseDraft = await loadDefaultContactDraft(page);
-      const payload = buildContactPayload(baseDraft, input);
-
-      const response = await astreaApiPost<AstreaSaveContactResponse>(
-        page,
-        `/contact/save`,
-        payload,
-      );
-
-      const createdContactId = response.response;
-      if (createdContactId == null || createdContactId === 'NOT_OK') {
-        throw new Error(
-          `API_ERROR: ${response.errorMessage || 'Astrea não retornou o ID do contato criado'}`,
-        );
-      }
-
-      return String(createdContactId);
-    });
+    const contactId = await withBrowserContext((page) => criarContatoNaPagina(page, input));
 
     return await buscarCliente(contactId);
   } catch (err) {

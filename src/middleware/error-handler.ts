@@ -20,6 +20,7 @@ function mapErrorToHttp(error: Error): { status: number; code: string; retryAfte
   if (msg.includes('LOGIN_FAILED_'))
     return { status: 503, code: 'BROWSER_UNAVAILABLE', retryAfter: 15 };
   if (msg.includes('NOT_FOUND')) return { status: 404, code: 'NOT_FOUND' };
+  if (msg.startsWith('CONFLICT')) return { status: 409, code: 'CONFLICT' };
   if (msg.includes('timeout') || msg.includes('Timeout')) return { status: 504, code: 'TIMEOUT' };
   if (msg.includes('Navigation failed')) return { status: 502, code: 'NAVIGATION_FAILED' };
 

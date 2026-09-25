@@ -21,6 +21,15 @@ export type {
   EventoAgenda,
   TipoEventoAgenda,
   StatusEventoAgenda,
+  OrigemOcupacao,
+  IntervaloOcupado,
+  DisponibilidadeAgenda,
+  ContatoEventoInput,
+  CriarEventoAgendaInput,
+  EventoAgendaCriado,
+  ResultadoCriacaoEvento,
+  RemarcarEventoAgendaInput,
+  EventoDoContato,
 } from '../models/index.js';
 
 export interface FiltrosAtendimento {
@@ -143,6 +152,23 @@ export interface FiltrosAgenda {
   numeroProcesso?: string;
 }
 
+/** Filtros de `calcularDisponibilidade` / GET /api/agenda/disponibilidade. */
+export interface FiltrosDisponibilidade {
+  /** IDs numéricos (string) dos usuários do Astrea cuja ocupação se quer. */
+  responsavelIds: string[];
+  /** Janela em `YYYY-MM-DD` (inclusiva), no máximo 31 dias. */
+  inicio: string;
+  fim: string;
+  /** Tipos que ocupam horário. Default: atendimento + audiencia. */
+  tipos?: Array<'prazo' | 'tarefa' | 'atendimento' | 'audiencia'>;
+  /** Duração assumida quando o evento não tem horaFim. Default 30. */
+  duracaoPadraoMin?: number;
+  /** Ignora o cache de 60 s (use na revalidação antes de agendar). */
+  fresh?: boolean;
+  /** Inclui o título dos eventos nas origens (pode conter nome de cliente). Default false. */
+  incluirTitulos?: boolean;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Respostas padrão da API
 // ─────────────────────────────────────────────────────────────────────────────
@@ -182,6 +208,10 @@ export interface ServiceError {
     | 'TIMEOUT'
     | 'AUTH_FAILED'
     | 'VALIDATION_ERROR'
+    | 'CONFLICT'
+    | 'FORBIDDEN'
     | 'API_ERROR';
   retryable: boolean;
+  /** Contexto estruturado opcional (ex.: `conflitos` de um CONFLICT). */
+  details?: unknown;
 }
