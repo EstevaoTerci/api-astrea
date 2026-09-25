@@ -13,7 +13,13 @@ vi.mock('./pool.js', () => ({
   },
 }));
 
-import { withBrowserContext } from './astrea-http.js';
+import {
+  astreaApiDelete,
+  astreaApiGet,
+  astreaApiPost,
+  astreaApiPut,
+  withBrowserContext,
+} from './astrea-http.js';
 import { browserPool } from './pool.js';
 
 const mockAcquire = vi.mocked(browserPool.acquirePage);
@@ -28,6 +34,19 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe('withBrowserContext — aba quente', () => {
+  it('repassa { warm: true } ao pool quando pedido', async () => {
+    await withBrowserContext(async () => 'ok', { warm: true });
+    expect(mockAcquire).toHaveBeenCalledWith({ warm: true });
+    expect(mockRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it('sem opção usa aba comum (warm false)', async () => {
+    await withBrowserContext(async () => 'ok');
+    expect(mockAcquire).toHaveBeenCalledWith({ warm: false });
+  });
 });
 
 describe('withBrowserContext — política de retry', () => {
@@ -74,5 +93,59 @@ describe('withBrowserContext — política de retry', () => {
 
     await expect(p).resolves.toBe('ok-na-segunda');
     expect(op).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('withBrowserContext — descarte e recarga da aba', () => {
+  it('sucesso libera a aba sem descartar', async () => {
+    await withBrowserContext(async () => 'ok', { warm: true });
+    expect(mockRelease).toHaveBeenCalledWith(expect.anything(), { descartar: false });
+  });
+
+  it('falha final libera a aba pedindo descarte (não estaciona aba possivelmente quebrada)', async () => {
+    await expect(
+      withBrowserContext(async () => {
+        throw new Error('API_ERROR_500: boom');
+      }, { warm: true }),
+    ).rejects.toThrow(/boom/);
+    expect(mockRelease).toHaveBeenCalledWith(expect.anything(), { descartar: true });
+  });
+
+  it('após erro de sessão (401), a retentativa recarrega a aba antes de repetir', async () => {
+    vi.useFakeTimers();
+    const goto = vi.fn().mockResolvedValue(undefined);
+    mockAcquire.mockResolvedValueOnce({ goto } as never);
+    const op = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('API_ERROR_401: sessão expirada'))
+      .mockResolvedValueOnce('ok');
+
+    const p = withBrowserContext(op, { warm: true });
+    await vi.runAllTimersAsync();
+
+    await expect(p).resolves.toBe('ok');
+    expect(goto).toHaveBeenCalledWith('about:blank');
+    expect(goto).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('helpers REST — timeout', () => {
+  it('astreaApiPost repassa timeout default de 60 s ao evaluate', async () => {
+    const evaluate = vi.fn().mockResolvedValue({ ok: 1 });
+    await astreaApiPost({ evaluate } as never, '/x', { a: 1 });
+    expect(evaluate.mock.calls[0][1]).toMatchObject({ method: 'POST', body: { a: 1 }, timeoutMs: 60_000 });
+    expect(evaluate.mock.calls[0][1].url).toMatch(/\/api\/v2\/x$/);
+  });
+
+  it('timeout customizado e demais métodos', async () => {
+    const evaluate = vi.fn().mockResolvedValue({});
+    await astreaApiPut({ evaluate } as never, '/y', {}, 5_000);
+    await astreaApiDelete({ evaluate } as never, '/z', 7_000);
+    await astreaApiGet({ evaluate } as never, '/w', 9_000);
+    expect(evaluate.mock.calls.map((c) => [c[1].method, c[1].timeoutMs])).toEqual([
+      ['PUT', 5_000],
+      ['DELETE', 7_000],
+      ['GET', 9_000],
+    ]);
   });
 });

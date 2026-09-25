@@ -30,6 +30,8 @@ import {
   mesclarClientes,
   getListarClientesCacheStats,
   getAniversariantesCacheStats,
+  buscarContatosNaPagina,
+  telefonesIguais,
 } from './clientes.service.js';
 import { astreaApiGet, astreaApiPost, astreaAppGet } from '../browser/astrea-http.js';
 
@@ -801,5 +803,52 @@ describe('getAniversariantesCacheStats', () => {
     expect(stats).toHaveProperty('inflightShared');
     expect(stats).toHaveProperty('entries');
     expect(stats).toHaveProperty('hitRatio');
+  });
+});
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers "na página" usados pela agenda (contato do lead)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('telefonesIguais', () => {
+  it('compara pelos 8 últimos dígitos, ignorando máscara, DDI e o 9 extra', () => {
+    expect(telefonesIguais('+5527990000001', '(27) 99000-0001')).toBe(true);
+    expect(telefonesIguais('+5527990000001', '2790000001')).toBe(true);
+    expect(telefonesIguais('+5527990000001', '990000001')).toBe(true);
+    expect(telefonesIguais('27999999999', '27999999998')).toBe(false);
+  });
+
+  it('com DDD dos dois lados, o DDD também precisa bater', () => {
+    expect(telefonesIguais('+5527990000001', '(33) 99000-0001')).toBe(false);
+    expect(telefonesIguais('27990000001', '33990000001')).toBe(false);
+  });
+
+  it('exige ao menos 8 dígitos dos dois lados', () => {
+    expect(telefonesIguais('1234567', '1234567')).toBe(false);
+    expect(telefonesIguais(undefined, '27999999999')).toBe(false);
+    expect(telefonesIguais('', '')).toBe(false);
+  });
+});
+
+describe('buscarContatosNaPagina', () => {
+  it('faz UM POST /contact/all com o texto e devolve resumo (id string, telefone)', async () => {
+    mockPost.mockResolvedValueOnce({ contacts: [makeContactListItem({ id: 987654321012, name: 'Maria' })] });
+
+    const r = await buscarContatosNaPagina({} as never, 'Maria', 10);
+
+    expect(mockPost).toHaveBeenCalledTimes(1);
+    const [, path, payload] = mockPost.mock.calls[0] as [unknown, string, any];
+    expect(path).toBe('/contact/all');
+    expect(payload.queryDTO.text).toBe('Maria');
+    expect(payload.page).toBe(0);
+    expect(payload.limit).toBe(10);
+    expect(r).toEqual([expect.objectContaining({ id: '987654321012', nome: 'Maria', telefone: '27999999999' })]);
+    expect(mockGet).not.toHaveBeenCalled();
+  });
+
+  it('lista vazia quando o Astrea não devolve contacts', async () => {
+    mockPost.mockResolvedValueOnce({});
+    expect(await buscarContatosNaPagina({} as never, 'X')).toEqual([]);
   });
 });

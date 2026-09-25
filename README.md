@@ -21,6 +21,13 @@ API REST que expõe dados do sistema jurídico [Astrea](https://astrea.net.br) v
 | `POST`  | `/api/atendimentos/:id/transformar-em-processo` | Converte atendimento em processo                       |
 | `POST`  | `/api/tarefas/:id/comentarios`                  | Adiciona comentário (texto puro) em tarefa             |
 | `GET`   | `/api/agenda`                                   | Agenda unificada (prazos+tarefas+atendimentos+audiências) por advogado/janela |
+| `GET`   | `/api/agenda/disponibilidade`                   | Intervalos OCUPADOS por usuário (regras de bloqueio aplicadas; cache 60 s) |
+| `POST`  | `/api/agenda/eventos`                           | Cria compromisso (idempotente por `chaveExterna`; 409 em conflito; contato + atendimento opcionais) |
+| `GET`   | `/api/agenda/eventos`                           | Compromissos de um contato (telefone + nome, ou `chaveExterna`) |
+| `GET`   | `/api/agenda/eventos/:id`                       | Carrega um compromisso |
+| `PATCH` | `/api/agenda/eventos/:id`                       | Remarca (checa conflito) — só eventos da automação, salvo `?forcar=1` |
+| `POST`  | `/api/agenda/eventos/:id/cancelar`              | Cancela (status CANCELED, mantém histórico) — idem |
+| `DELETE`| `/api/agenda/eventos/:id`                       | Exclui — idem |
 
 ### Filtros nativos do Astrea (queryDTO) em `GET /api/clientes` e `GET /api/clientes/todos`
 
@@ -59,6 +66,30 @@ Wrapper fino sobre o endpoint interno `/calendar-pro/complete` do Astrea, o mesm
 | `incluirSemPrazo`| `boolean`                                           | `false`                          | quando true, anexa tarefas sem deadline; só tem efeito se `tipos` incluir `tarefa` |
 
 Cada item retornado tem `tipo`, `tituloComResponsavel` (formato `"LB - Verificar processo"` igual ao app), `responsavelNome`, `urlCaso`, `numeroProcesso`, e campos específicos por tipo (`horaInicio`/`horaFim` para atendimentos/audiências; `forum`/`endereco`/`sala` para audiências).
+
+### Agenda — disponibilidade e eventos (agenda da atendente virtual)
+
+Contrato confirmado contra o Astrea real em 25/09/2026 — ver [docs/agenda-eventos-discovery.md](docs/agenda-eventos-discovery.md).
+
+**`GET /api/agenda/disponibilidade?responsavelIds=<id,id>&inicio=YYYY-MM-DD&fim=YYYY-MM-DD[&fresh=1][&incluirTitulos=1][&tipos=][&duracaoPadraoMin=30]`**
+Devolve `busy` e `porResponsavel` com intervalos semiabertos `[inicio, fim)` em ISO `-03:00`. Regras: evento de dia inteiro bloqueia o dia; evento em que a pessoa é só **envolvida** também ocupa; sem hora de fim → +`duracaoPadraoMin`; **cancelados não ocupam**; sobrepostos são fundidos e `origens` explica cada bloco. Títulos (podem ter nome de cliente) só com `incluirTitulos=1`. Janela máx. 31 dias. Cache 60 s; `fresh=1` fura (use antes de agendar). Qualquer não-200 = não ofereça horários.
+
+**`POST /api/agenda/eventos`** (corpo `.strict()`):
+```json
+{ "titulo": "ATENDIMENTO INICIAL - NOME - ONLINE", "data": "2026-09-30", "horaInicio": "14:00", "horaFim": "14:30",
+  "responsavelId": "<advogado>", "envolvidosIds": ["<secretária>"], "comentarios": "link da conversa…",
+  "chaveExterna": "n8n-ag#123", "modalidade": "remoto", "endereco": "…",
+  "contato": { "nome": "Nome Completo", "telefone": "+5527…" }, "criarAtendimento": true, "verificarConflito": true }
+```
+- **201** criado · **200** `reaproveitado: true` (já existia evento ativo com a mesma `[ref:chaveExterna]`) · **409** `CONFLICT` com `details.conflitos` (sem títulos) · **503** com `Retry-After` · **504** timeout (pode ter criado: repita com a mesma chave).
+- Idempotência: a `chaveExterna` é gravada nas observações como `[ref:…]`; repetir a chamada (retry, timeout) não duplica evento nem atendimento; chamadas simultâneas com a mesma chave compartilham o resultado.
+- `contato`: acha pelo **nome** e confirma pelo telefone (a busca do Astrea não indexa telefone); senão cria (sem CPF). Com `criarAtendimento`, abre um Atendimento de CRM e o usa como `caseId` do evento. Tudo em melhor esforço: `parcial: true` + `erros` se contato/atendimento/vínculo falhar — o evento é criado mesmo assim.
+
+**`GET /api/agenda/eventos?telefone=&nome=&chaveExterna=&inicio=&fim=&responsavelIds=[&incluirCancelados=1]`** — compromissos de um contato: `motivo` `ref` (observações com a `[ref:]`), `caso` (caseId é atendimento/caso do contato achado por **nome + telefone**) ou `observacoes` (telefone escrito nas observações). Exige telefone ou chaveExterna.
+
+**Mutações por id** (`PATCH`, `/cancelar`, `DELETE`): por segurança só valem para eventos criados pela automação (com `[ref:]`); para os demais, `?forcar=1` (403 `FORBIDDEN` sem ele). As tools MCP (uso humano) forçam.
+
+**Aba quente**: estas rotas reutilizam uma aba estacionada do pool (`/health` → `pool.warm`), o que derruba a latência de 15–40 s para ~0,5–1,5 s. Recomenda-se um keep-alive (uma disponibilidade a cada 10 min no expediente) para não cair no cold start após 15 min ocioso.
 
 ## Autenticação
 

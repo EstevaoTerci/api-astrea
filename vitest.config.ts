@@ -35,7 +35,6 @@ export default defineConfig({
         // service/route abaixo, remova a entrada correspondente desta lista —
         // o threshold global vai validar o ganho automaticamente.
         // ─────────────────────────────────────────────────────────────────────
-        'src/services/agenda.service.ts',
         'src/services/andamentos.service.ts',
         'src/services/atendimentos.service.ts',
         'src/services/casos.service.ts',
@@ -44,7 +43,6 @@ export default defineConfig({
         'src/services/publicacoes.service.ts',
         'src/services/tarefas.service.ts',
         'src/services/usuarios.service.ts',
-        'src/routes/agenda.routes.ts',
         'src/routes/andamentos.routes.ts',
         'src/routes/atendimentos.routes.ts',
         'src/routes/casos.routes.ts',

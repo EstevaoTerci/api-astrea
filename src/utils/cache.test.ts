@@ -74,6 +74,29 @@ describe('InflightTtlCache', () => {
     vi.useRealTimers();
   });
 
+  it('invalidateAll descarta dados mas preserva as métricas', async () => {
+    const cache = new InflightTtlCache<string>(1000);
+    await cache.get('k', vi.fn().mockResolvedValue('a'));
+    await cache.get('k', vi.fn().mockResolvedValue('b'));
+    cache.invalidateAll();
+    const loader = vi.fn().mockResolvedValue('c');
+    expect(await cache.get('k', loader)).toBe('c');
+    expect(loader).toHaveBeenCalledTimes(1);
+    expect(cache.stats).toMatchObject({ hits: 1, misses: 2 });
+  });
+
+  it('loader iniciado antes de invalidateAll não grava o resultado velho', async () => {
+    const cache = new InflightTtlCache<string>(1000);
+    let liberar!: (v: string) => void;
+    const lento = cache.get('k', () => new Promise<string>((r) => (liberar = r)));
+    cache.invalidateAll();
+    liberar('velho');
+    expect(await lento).toBe('velho');
+    const loader = vi.fn().mockResolvedValue('novo');
+    expect(await cache.get('k', loader)).toBe('novo');
+    expect(loader).toHaveBeenCalledTimes(1);
+  });
+
   it('executa o loader em miss e cacheia o resultado', async () => {
     const cache = new InflightTtlCache<string>(1000);
     const loader = vi.fn().mockResolvedValue('valor');

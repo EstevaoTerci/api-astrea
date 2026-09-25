@@ -70,6 +70,8 @@ export class InflightTtlCache<T> {
   private hits = 0;
   private misses = 0;
   private inflightShared = 0;
+  /** Incrementada a cada invalidação; loads de gerações antigas não gravam. */
+  private geracao = 0;
 
   constructor(private readonly ttlMs: number) {}
 
@@ -96,13 +98,17 @@ export class InflightTtlCache<T> {
 
     this.misses++;
 
+    const geracao = this.geracao;
     const promise = (async () => {
       try {
         const value = await loader();
-        this.store.set(key, { kind: 'resolved', value, expiresAt: Date.now() + this.ttlMs });
+        // Invalidado durante o load: devolve ao chamador, mas não grava dado velho.
+        if (geracao === this.geracao) {
+          this.store.set(key, { kind: 'resolved', value, expiresAt: Date.now() + this.ttlMs });
+        }
         return value;
       } catch (err) {
-        this.store.delete(key);
+        if (geracao === this.geracao) this.store.delete(key);
         throw err;
       }
     })();
@@ -111,8 +117,18 @@ export class InflightTtlCache<T> {
     return promise;
   }
 
+  /**
+   * Descarta todos os dados (inclusive loads em andamento, que não gravarão o
+   * resultado) preservando as métricas. Use após mutações na fonte.
+   */
+  invalidateAll(): void {
+    this.geracao++;
+    this.store.clear();
+  }
+
   /** Limpa estado e métricas (útil em testes). */
   clear(): void {
+    this.geracao++;
     this.store.clear();
     this.hits = 0;
     this.misses = 0;

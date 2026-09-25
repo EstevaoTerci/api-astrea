@@ -580,6 +580,63 @@ export async function listarAtendimentos(
 // criarAtendimento
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Cria o atendimento (consulting de CRM) numa aba JÁ autenticada e na rota
+ * Angular, sem abrir outra aba. `attachedCase` já resolvido pelo chamador.
+ * Usado por `criarAtendimento` e pela agenda (consulta marcada pela Léia).
+ */
+export async function criarAtendimentoNaPagina(
+  page: Page,
+  input: CriarAtendimentoInput,
+  attachedCase: { id: string | number; title: string } | null = null,
+): Promise<Atendimento> {
+  const currentUserId = input.responsavelId || (await getAstreaUserId(page));
+  const contact = await loadContactSummary(page, input.clienteId);
+  if (!contact?.name) {
+    throw new Error('NOT_FOUND: Contato não encontrado');
+  }
+
+  const firstMessage = input.descricao?.trim() || input.assunto.trim();
+  const payload = {
+    subject: input.assunto.trim(),
+    message: firstMessage,
+    tagIds: [],
+    responsibleId: currentUserId,
+    ownerId: currentUserId,
+    active: true,
+    customers: [
+      {
+        id: coerceAstreaId(input.clienteId) ?? input.clienteId,
+        name: contact.name,
+        main: true,
+      },
+    ],
+    caseAttached: attachedCase,
+    messages: [
+      {
+        message: firstMessage,
+        userAuthor: currentUserId,
+      },
+    ],
+  };
+
+  const res = await astreaApiPost<ApiConsulting>(page, '/consulting', payload);
+  return mapApiAtendimentoToAtendimento(res);
+}
+
+/**
+ * Atendimentos (consultings) de um contato, numa aba já autenticada e na rota
+ * Angular. Uma página de até `limite` itens (os mais recentes primeiro).
+ */
+export async function listarAtendimentosDoContatoNaPagina(
+  page: Page,
+  clienteId: string,
+  limite = 20,
+): Promise<Atendimento[]> {
+  const { items } = await fetchConsultingPage(page, { clienteId }, 1, limite);
+  return items.map(mapApiAtendimentoToAtendimento);
+}
+
 export async function criarAtendimento(
   input: CriarAtendimentoInput,
 ): Promise<ServiceResponse<Atendimento>> {
@@ -587,39 +644,7 @@ export async function criarAtendimento(
     const attachedCase = await resolveCaseAttachment(input.casoId);
     const atendimento = await withBrowserContext(async (page) => {
       await navigateTo(page, ANGULAR_PAGE_PATH);
-
-      const currentUserId = input.responsavelId || (await getAstreaUserId(page));
-      const contact = await loadContactSummary(page, input.clienteId);
-      if (!contact?.name) {
-        throw new Error('NOT_FOUND: Contato não encontrado');
-      }
-
-      const firstMessage = input.descricao?.trim() || input.assunto.trim();
-      const payload = {
-        subject: input.assunto.trim(),
-        message: firstMessage,
-        tagIds: [],
-        responsibleId: currentUserId,
-        ownerId: currentUserId,
-        active: true,
-        customers: [
-          {
-            id: coerceAstreaId(input.clienteId) ?? input.clienteId,
-            name: contact.name,
-            main: true,
-          },
-        ],
-        caseAttached: attachedCase,
-        messages: [
-          {
-            message: firstMessage,
-            userAuthor: currentUserId,
-          },
-        ],
-      };
-
-      const res = await astreaApiPost<ApiConsulting>(page, '/consulting', payload);
-      return mapApiAtendimentoToAtendimento(res);
+      return criarAtendimentoNaPagina(page, input, attachedCase);
     });
 
     return { ok: true, data: atendimento };
